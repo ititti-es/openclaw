@@ -6,6 +6,7 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
@@ -201,7 +202,9 @@ export async function resolveFollowupDeliveryDecision(params: {
         ? sourceReplyDelivery
         : pendingContinuation
           ? "pending"
-          : "empty",
+          : hasDeliberateSilentTerminalReply(result)
+            ? "silent"
+            : "empty",
   );
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
   const hasLegacyMessagingToolEvidence =

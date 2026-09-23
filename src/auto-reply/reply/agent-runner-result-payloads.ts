@@ -5,6 +5,7 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   isSyntheticSourceReplyTurn,
   resolveReplyCompletion,
@@ -183,7 +184,9 @@ export async function prepareReplyAgentPayloads(state: {
         ? sourceReplyDelivery
         : pendingContinuation
           ? "pending"
-          : "empty",
+          : hasDeliberateSilentTerminalReply(runResult)
+            ? "silent"
+            : "empty",
   );
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = completion;
@@ -227,7 +230,7 @@ export async function prepareReplyAgentPayloads(state: {
     ? undefined
     : buildEmptyInteractiveReplyPayload({ completion });
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
-    if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
+    if (completion.outcome !== "missing" || !sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
       return undefined;
     }
     if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
