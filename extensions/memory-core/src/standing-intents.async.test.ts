@@ -78,7 +78,7 @@ function keep<T>(work: Promise<T>): Promise<T> {
   return work;
 }
 
-async function holdWriter(beforeRelease?: () => void) {
+async function holdWriter(beforeRelease?: () => void, beforeLock?: () => Promise<void>) {
   const target = {
     agentId: "main",
     sessionId: "standing-intent-writer",
@@ -89,6 +89,7 @@ async function holdWriter(beforeRelease?: () => void) {
     ...target,
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
   });
+  await beforeLock?.();
   const entered = deferred();
   const finish = deferred();
   releases.push(finish.resolve);
@@ -462,7 +463,11 @@ describe("standing-intent admitted operations", () => {
   it("preserves a queued live caller after an expired hook and a cold database reopen", async () => {
     const existing = await seed();
     const { runner } = await registerHooks();
-    const held = await holdWriter(closeOpenClawAgentDatabasesForTest);
+    // Retire the seeded worker before holding its queue; the callback still cold-closes
+    // the host handle and rejects callers that capture that handle before admission.
+    const held = await holdWriter(closeOpenClawAgentDatabasesForTest, () =>
+      closeOpenClawAgentDatabasesAsync(stateDir),
+    );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const hookWork = keep(
