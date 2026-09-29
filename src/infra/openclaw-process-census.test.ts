@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -12,6 +14,7 @@ const {
   container,
   darwinCommand,
   windows,
+  fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
   directory: vi.fn(),
@@ -23,15 +26,20 @@ const {
   container: vi.fn(),
   darwinCommand: vi.fn(),
   windows: vi.fn(),
+  fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
-vi.mock("node:fs", () => ({
-  readdirSync: directory,
-  readFileSync: read,
-  readlinkSync: readlink,
-  realpathSync: realpath,
-  default: { readFileSync: read, realpathSync: realpath, readlinkSync: readlink, statSync: stat },
-}));
+vi.mock("node:fs", () => {
+  // All per-case overrides share the same synthetic paths on Unix and Windows hosts.
+  const filesystem = {
+    readdirSync: directory,
+    readFileSync: (file: string, ...args: unknown[]) => read(fixturePath(file), ...args),
+    readlinkSync: (file: string) => readlink(fixturePath(file)),
+    realpathSync: (file: string) => realpath(fixturePath(file)),
+    statSync: (file: string) => stat(fixturePath(file)),
+  };
+  return { ...filesystem, default: filesystem };
+});
 vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
@@ -80,9 +88,7 @@ beforeEach(() => {
     return cwd;
   });
   directory.mockReset().mockImplementation(() => Array.from(rows.keys(), String));
-  read.mockReset().mockImplementation((input: string) => {
-    // Native Windows path operations can add a drive and separators to these POSIX fixtures.
-    const file = input.replaceAll("\\", "/").replace(/^[A-Za-z]:/, "");
+  read.mockReset().mockImplementation((file: string) => {
     if (file.endsWith("/package.json")) {
       return JSON.stringify({
         name: file === "/app/package.json" ? "openclaw" : "unrelated-service",
@@ -293,7 +299,7 @@ it.each([
 
 it.each([
   ["--test-reporter", "/app/reporter.js", "holder"],
-  ["--test-reporter", "file:///app/reporter.js", "holder"],
+  ["--test-reporter", pathToFileURL(path.resolve("/app/reporter.js")).href, "holder"],
   ["--test-reporter", "reporter/register", "unresolved"],
   ["--test-reporter", "reporter", "unresolved"],
   ["--test-global-setup", "setup", "unresolved"],
