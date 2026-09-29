@@ -287,14 +287,9 @@ function convertResponsesMessagesWithStyle(
     return providerStyle ? sanitized : sanitized.replace(/_+$/, "");
   };
   const normalizeIdPart = (part: string) => {
-    const sanitized = sanitizeIdPart(part);
-    const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
-    return normalized.replace(/_+$/, "");
+    return sanitizeIdPart(part).slice(0, 64).replace(/_+$/, "");
   };
-  const buildForeignResponsesItemId = (itemId: string) => {
-    const normalized = `fc_${shortHash(itemId)}`;
-    return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-  };
+  const buildForeignResponsesItemId = (itemId: string) => `fc_${shortHash(itemId)}`;
   const buildSameProviderCopilotResponsesItemId = (itemId: string) => {
     const sanitized = sanitizeIdPart(itemId);
     const candidate = sanitized.startsWith("fc_") ? sanitized : `fc_${sanitized}`;
@@ -305,10 +300,7 @@ function convertResponsesMessagesWithStyle(
     _targetModel: Model,
     source: { provider: string; api: Api },
   ) => {
-    if (!allowedToolCallProviders.has(model.provider)) {
-      return normalizeIdPart(id);
-    }
-    if (!id.includes("|")) {
+    if (!allowedToolCallProviders.has(model.provider) || !id.includes("|")) {
       return normalizeIdPart(id);
     }
     const separatorIndex = id.indexOf("|");
