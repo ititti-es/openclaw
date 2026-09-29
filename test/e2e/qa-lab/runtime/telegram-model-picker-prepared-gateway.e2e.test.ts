@@ -26,7 +26,6 @@ const BOT_TOKEN = "424242:telegram-model-picker-proof";
 const CHAT_ID = 2468;
 const MESSAGE_ID = 9001;
 const PREPARED_MODEL = "prepared-model";
-const DISCOVERED_MODEL = "discovered-model";
 const REPLACEMENT_MODEL = "replacement-model";
 const REPLACEMENT_PROVIDER = "qa-picker";
 const REPLACEMENT_MODEL_REF = `${REPLACEMENT_PROVIDER}/${REPLACEMENT_MODEL}`;
@@ -452,7 +451,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
       writeJson(res, 200, {
         models: [
           {
-            name: DISCOVERED_MODEL,
+            name: PREPARED_MODEL,
             modified_at: "2026-08-16T00:00:00Z",
             digest: "prepared-model-digest",
             size: 1,
@@ -519,7 +518,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     } else if (
       method === "editMessageText" &&
       pickerStage === "models" &&
-      hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
+      hasCallback({ method, body }, `mdl_sel_ollama/${PREPARED_MODEL}`)
     ) {
       pickerStage = "repeated-providers";
       queueCallback("mdl_prov");
@@ -641,7 +640,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           const warmedModels = await gateway.call("models.list", { view: "all" });
           expect(warmedModels).toMatchObject({
             models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+              expect.objectContaining({ provider: "ollama", id: PREPARED_MODEL }),
             ]),
           });
           expect(discoveryRequests).toBeGreaterThan(0);
@@ -672,7 +671,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
-              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
+              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${PREPARED_MODEL}`),
           ).toBe(true);
           expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
@@ -682,7 +681,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           const preparedModels = await gateway.call("models.list", { view: "default" });
           expect(preparedModels).toMatchObject({
             models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+              expect.objectContaining({ provider: "ollama", id: PREPARED_MODEL }),
             ]),
           });
           expect(discoveryRequests).toBe(warmDiscoveryRequests);
@@ -695,7 +694,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           });
           expect(refreshedModels).toMatchObject({
             models: expect.arrayContaining([
-              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+              expect.objectContaining({ provider: "ollama", id: PREPARED_MODEL }),
             ]),
           });
           expect(discoveryRequests).toBeGreaterThan(warmDiscoveryRequests);
