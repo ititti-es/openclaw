@@ -86,7 +86,7 @@ export async function processDiscordMessage(
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
-    messageText,
+    messageText: text,
     threadBindings,
     route,
     abortSignal,
@@ -97,7 +97,6 @@ export async function processDiscordMessage(
   if (abortSignal?.aborted || isPolicyCurrent?.() === false) {
     return;
   }
-  const text = messageText;
   if (!text && mediaList.length === 0) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
@@ -269,17 +268,19 @@ export async function processDiscordMessage(
       deliverySession?: ReturnType<typeof getGroupThreadDeliverySession>;
     },
   ) => {
-    if (abortSignal?.aborted) {
-      // Surface so operators don't chase missing replies when an abort
-      // drops a model-produced text payload.
+    const logSkippedReply = (reason: Parameters<typeof formatDiscordReplySkip>[0]["reason"]) =>
       logVerbose(
         formatDiscordReplySkip({
           kind: info.kind,
-          reason: "aborted before delivery",
+          reason,
           target: deliverTarget,
           sessionKey: ctxPayload.SessionKey,
         }),
       );
+    if (abortSignal?.aborted) {
+      // Surface so operators don't chase missing replies when an abort
+      // drops a model-produced text payload.
+      logSkippedReply("aborted before delivery");
       return { visibleReplySent: false };
     }
     const deliverySession = options?.deliverySession ?? getGroupThreadDeliverySession();
@@ -372,14 +373,7 @@ export async function processDiscordMessage(
       kind: info.kind,
     });
     if (!deliverablePayload) {
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "internal-only payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
+      logSkippedReply("internal-only payload");
       return { visibleReplySent: false };
     }
     if (
@@ -418,14 +412,7 @@ export async function processDiscordMessage(
       isError: deliverablePayload.isError === true,
       deliverNormally: async () => {
         if (abortSignal?.aborted) {
-          logVerbose(
-            formatDiscordReplySkip({
-              kind: info.kind,
-              reason: "aborted before delivery",
-              target: deliverTarget,
-              sessionKey: ctxPayload.SessionKey,
-            }),
-          );
+          logSkippedReply("aborted before delivery");
           return deliveryResult;
         }
         // Final replies need MESSAGE_CREATE so Discord advances unread state.
@@ -624,14 +611,13 @@ export async function processDiscordMessage(
     return;
   }
 
-  const finalDispatchResult = dispatchResult;
-  if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
+  if (!dispatchResult || !hasFinalInboundReplyDispatch(dispatchResult)) {
     return;
   }
   if (shouldLogVerbose()) {
-    const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
+    const finalCount = dispatchResult.settledReceipt?.counts.final.delivered ?? 0;
     logVerbose(
-      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
+      `discord: delivered ${finalCount} repl${finalCount === 1 ? "y" : "ies"} to ${replyTarget}`,
     );
   }
 }

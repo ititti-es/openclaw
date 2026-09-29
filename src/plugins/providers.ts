@@ -379,10 +379,6 @@ function resolveManifestRegistry(params: {
   });
 }
 
-function stripModelProfileSuffix(value: string): string {
-  return splitTrailingAuthProfile(value).model;
-}
-
 function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: string } | null {
   const trimmed = rawModel.trim();
   if (!trimmed) {
@@ -390,11 +386,11 @@ function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: 
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    const modelId = stripModelProfileSuffix(trimmed);
+    const modelId = splitTrailingAuthProfile(trimmed).model;
     return modelId ? { modelId } : null;
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = stripModelProfileSuffix(trimmed.slice(slash + 1));
+  const modelId = splitTrailingAuthProfile(trimmed.slice(slash + 1)).model;
   if (!provider || !modelId) {
     return null;
   }

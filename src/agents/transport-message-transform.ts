@@ -44,10 +44,6 @@ const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
   "openclaw-azure-openai-responses-transport",
 ]);
 
-function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
-  return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
-}
-
 /** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
@@ -63,7 +59,7 @@ export function transformTransportMessages(
     preserveUnframedToolResults?: boolean;
   },
 ): Context["messages"] {
-  const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
+  const allowSyntheticToolResults = SYNTHETIC_TOOL_RESULT_APIS.has(model.api);
   const syntheticToolResultText = OPENAI_RESPONSES_ABORTED_OUTPUT_APIS.has(model.api)
     ? "aborted"
     : "No result provided";
