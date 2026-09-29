@@ -2,6 +2,7 @@
 // Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -26,12 +27,7 @@ function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description
 
 /** Safely reads and normalizes a loopback tool name from plugin-provided tool objects. */
 export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
-  const value = readLoopbackToolField(tool, "name");
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const name = value.trim();
-  return name || undefined;
+  return normalizeOptionalString(readLoopbackToolField(tool, "name"));
 }
 
 function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined {
