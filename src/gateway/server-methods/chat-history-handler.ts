@@ -74,6 +74,7 @@ import {
   respondChatHistoryUnavailable,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
+import { overlayServerOwnedHistoryPage } from "./chat-history-server-owned.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
@@ -366,6 +367,10 @@ export async function handleChatHistoryRequest({
     }
     respondChatHistoryUnavailable(method, respond, unavailableMessage);
     return;
+  }
+  if (!cursor && sessionId === entry?.sessionId) {
+    const model = resolvedSessionModel;
+    historyPage = await overlayServerOwnedHistoryPage(cfg, model, sessionId, historyPage, context);
   }
   const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
   // Imported snapshots have no back-scroll cursor. Preserve their complete
