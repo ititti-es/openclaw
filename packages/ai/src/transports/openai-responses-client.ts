@@ -66,6 +66,7 @@ import {
   responsesRequestLifecycle,
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
+import { resolveServerOwnedHistoryRequest } from "./openai-responses-server-history.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
 import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
@@ -289,16 +290,31 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           }
           return params;
         };
-        const buildRequest = (replayMode: OpenAIResponsesReplayMode, requestContext = context) =>
-          prepareRequest(
+        // The endpoint owns history: send only what follows the last stored turn.
+        // "full-history" is the rejected-continuation fallback and replays everything.
+        const serverHistory =
+          config.httpContinuation && !websocketMode
+            ? resolveServerOwnedHistoryRequest(model, context)
+            : undefined;
+        const buildRequest = async (
+          replayMode: OpenAIResponsesReplayMode,
+          requestContext = context,
+        ) => {
+          const delta =
+            serverHistory && replayMode !== "full-history" && requestContext === context
+              ? serverHistory
+              : undefined;
+          const request = await prepareRequest(
             config.buildRequest(
               model,
-              requestContext,
+              delta?.context ?? requestContext,
               responsesOptions,
               turnState?.metadata,
               replayMode,
             ),
           );
+          return delta ? { ...request, previous_response_id: delta.previousResponseId } : request;
+        };
         let params = await buildRequest("checkpoint");
         const asyncTools =
           asyncToolExecutionEligible &&

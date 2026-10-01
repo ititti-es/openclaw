@@ -594,6 +594,16 @@ export interface OpenAIResponsesCompat {
    * `store: true` turns. Default: false.
    */
   supportsResponsesContinuation?: boolean;
+  /**
+   * The endpoint is the source of truth for conversation history. Requires
+   * `supportsResponsesContinuation`. After the first turn, each request carries
+   * `previous_response_id` from the last stored assistant turn plus only the
+   * messages that follow it; the local transcript is never replayed, so the
+   * continuation survives gateway restarts and idle periods. A rejected
+   * `previous_response_id` still falls back to one full-history request.
+   * Default: false.
+   */
+  responsesHistoryOwnedByServer?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
