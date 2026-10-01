@@ -47,6 +47,10 @@ import {
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import {
+  overlayServerOwnedHistoryPage,
+  resolveServerOwnedHistoryRoute,
+} from "./chat-history-server-owned.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
@@ -253,6 +257,14 @@ export async function handleChatHistoryRequest({
         ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
         : [],
     );
+    // Server-owned routes overlay endpoint content onto the local page, so they need
+    // message objects rather than the pre-encoded response.
+    const serverOwnedHistory =
+      !cursor &&
+      sessionId !== undefined &&
+      sessionId === entry?.sessionId &&
+      resolveServerOwnedHistoryRoute(cfg, resolvedSessionModel.provider, resolvedSessionModel.model) !==
+        undefined;
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     try {
       historyPage = cursor
@@ -263,7 +275,7 @@ export async function handleChatHistoryRequest({
               readChatHistoryPage(
                 {
                   // Internal adapters may inspect message objects before responding.
-                  encodeResponse: acceptsSerializedJson && method === req.method,
+                  encodeResponse: acceptsSerializedJson && method === req.method && !serverOwnedHistory,
                   entry: historyEntry,
                   provider: resolvedSessionModel.provider,
                   sessionId,
@@ -295,6 +307,16 @@ export async function handleChatHistoryRequest({
       }
       respondChatHistoryUnavailable(method, respond, unavailableMessage);
       return;
+    }
+    if (serverOwnedHistory) {
+      historyPage = await overlayServerOwnedHistoryPage(
+        cfg,
+        resolvedSessionModel,
+        sessionId,
+        historyPage,
+        context,
+        signal,
+      );
     }
     const responsePage = historyPage.encodedResponse
       ? {

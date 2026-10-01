@@ -362,6 +362,20 @@ export function buildOpenAIClientHeaders(
     // (companion/btw effects sessions) 400 without this clamp.
     resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
+  // A route that owns history files every turn under this session, so the
+  // conversation can be read back by session id. `x-<vendor>-session-id` is the
+  // generic form gateways such as LiteLLM recognise for any client.
+  if (
+    sessionId &&
+    OPENAI_RESPONSES_APIS.has(model.api) &&
+    (model.compat as { responsesHistoryOwnedByServer?: boolean } | undefined)
+      ?.responsesHistoryOwnedByServer === true &&
+    !Object.keys(resolvedHeaders).some(
+      (key) => normalizeLowercaseStringOrEmpty(key) === "x-openclaw-session-id",
+    )
+  ) {
+    resolvedHeaders["x-openclaw-session-id"] = sessionId;
+  }
   return (
     resolveOpencodeSessionHeaders(model, { sessionId, headers: resolvedHeaders }) ?? resolvedHeaders
   );
