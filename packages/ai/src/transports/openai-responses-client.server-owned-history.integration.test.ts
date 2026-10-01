@@ -194,6 +194,49 @@ describe("server-owned Responses history (loopback server, no SDK mocking)", () 
     }
   });
 
+  it("sends tool results that answer the stored turn's tool calls", async () => {
+    const server = new ScriptedResponsesServer([() => completedFrame("resp_2", "done")]);
+    const baseUrl = await server.listen();
+    try {
+      const model = customEndpointModel(baseUrl);
+      const toolTurn = {
+        ...assistantTurn(model, "resp_1", ""),
+        content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: { q: "x" } }],
+        stopReason: "toolUse",
+      } as AssistantMessage;
+      await run(
+        model,
+        {
+          messages: [
+            userMessage("look it up", 1),
+            toolTurn,
+            {
+              role: "toolResult",
+              toolCallId: "call_1",
+              toolName: "lookup",
+              content: [{ type: "text", text: "tool says hi" }],
+              isError: false,
+              timestamp: 3,
+            },
+          ],
+          tools: [],
+        } as Context,
+        "server-owned-tools",
+      );
+
+      expect(server.requests[0]).toMatchObject({ previous_response_id: "resp_1" });
+      expect(server.requests[0]?.input).toEqual([
+        expect.objectContaining({
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "tool says hi",
+        }),
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("sends the whole transcript on the first turn", async () => {
     const server = new ScriptedResponsesServer([() => completedFrame("resp_1", "first answer")]);
     const baseUrl = await server.listen();
@@ -227,7 +270,7 @@ describe("server-owned Responses history (loopback server, no SDK mocking)", () 
       );
 
       expect(server.requests[0]).not.toHaveProperty("previous_response_id");
-      expect((server.requests[0]?.input as unknown[]).length).toBeGreaterThan(1);
+      expect((server.requests[0]?.input as unknown[] | undefined)?.length).toBeGreaterThan(1);
     } finally {
       await server.close();
     }
