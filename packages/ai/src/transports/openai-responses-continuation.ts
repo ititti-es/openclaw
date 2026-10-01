@@ -483,6 +483,30 @@ export function resolveResponsesContinuationRequest(
   };
 }
 
+/**
+ * Content-free description of where a resent history stops matching the stored
+ * continuation baseline: the first differing index and the item kinds there.
+ * Used only for transport debug logging.
+ */
+function describeHistoryMismatch(
+  continuation: ResponsesContinuationState,
+  request: ResponsesContinuationRequest,
+): string {
+  const baseline = [
+    ...normalizeAssistantReplayInput(continuation.lastRequest.input ?? []),
+    ...normalizeAssistantReplayInput(continuation.lastResponseItems, true),
+  ];
+  const current = normalizeAssistantReplayInput((request.input ?? []).slice(0, baseline.length));
+  const kind = (item: unknown) =>
+    isRecord(item) ? [item.type, item.role].filter(Boolean).join("/") || "object" : typeof item;
+  for (let index = 0; index < baseline.length; index += 1) {
+    if (stableStringify(current[index]) !== stableStringify(baseline[index])) {
+      return `index=${index}/${baseline.length} stored=${kind(baseline[index])} sent=${kind(current[index])}`;
+    }
+  }
+  return `index=none/${baseline.length}`;
+}
+
 type HttpContinuationEntry =
   | {
       kind: "ready";
@@ -546,6 +570,11 @@ export function claimOpenAIResponsesHttpContinuation(
     );
     const fullRequest = resolved.fullRequest ?? request;
     return {
+      continuationStatus: resolved.continuationStatus,
+      historyMismatch:
+        resolved.continuationStatus === "history_changed" && previous?.kind === "ready"
+          ? describeHistoryMismatch(previous.state, request)
+          : undefined,
       // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
       request: params.request.store === false ? fullRequest : resolved.request,
       fullRequest,

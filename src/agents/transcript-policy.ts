@@ -78,6 +78,19 @@ function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   return compat?.supportsReasoningEffort === false;
 }
 
+/**
+ * Stored Responses continuation sends only what follows the previous response,
+ * so the replayed history must stay append-only: per-turn runtime context has
+ * to persist as a carrier instead of being rebuilt, or every turn looks like a
+ * rewritten history and falls back to a full resend.
+ */
+function modelUsesStoredResponsesContinuation(model?: ProviderRuntimeModel): boolean {
+  const compat = model?.compat as
+    | { supportsResponsesContinuation?: boolean; supportsStore?: boolean }
+    | undefined;
+  return compat?.supportsResponsesContinuation === true && compat.supportsStore !== false;
+}
+
 function shouldPreserveReasoningContentReplay(params: {
   modelId?: string | null;
   model?: ProviderRuntimeModel;
@@ -160,6 +173,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
       : {}),
     ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
       ? { allowSyntheticToolResults: true }
+      : {}),
+    ...(params.modelApi === "openai-responses" && modelUsesStoredResponsesContinuation(params.model)
+      ? { appendOnlyRuntimeContext: true }
       : {}),
   };
 }

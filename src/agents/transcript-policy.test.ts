@@ -268,6 +268,36 @@ describe("resolveTranscriptPolicy", () => {
     expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
   });
 
+  it("keeps runtime context append-only for custom Responses routes with stored continuation", () => {
+    const continuationModel = {
+      compat: { supportsResponsesContinuation: true },
+    } as unknown as ProviderRuntimeModel;
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "composer-2.5",
+      modelApi: "openai-responses",
+      model: continuationModel,
+    });
+    expect(policy.appendOnlyRuntimeContext).toBe(true);
+
+    const noStorePolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "composer-2.5",
+      modelApi: "openai-responses",
+      model: {
+        compat: { supportsResponsesContinuation: true, supportsStore: false },
+      } as unknown as ProviderRuntimeModel,
+    });
+    expect(noStorePolicy.appendOnlyRuntimeContext).toBe(false);
+
+    const statelessPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "composer-2.5",
+      modelApi: "openai-responses",
+    });
+    expect(statelessPolicy.appendOnlyRuntimeContext).toBe(false);
+  });
+
   it.each([
     "kimi-for-coding",
     "moonshotai/kimi-k2.6",
