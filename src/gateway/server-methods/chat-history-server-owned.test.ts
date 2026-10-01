@@ -122,6 +122,28 @@ describe("server-owned chat history", () => {
     expect(replaced).toBe(6);
   });
 
+  it("reads each response's turn from its own compaction version and skips summaries", () => {
+    const turns = storedTurnsByResponse({
+      items: [
+        { version: 1, seq: 0, is_output: false, content: userInput("first") },
+        { version: 1, seq: 1, is_output: true, content: assistantOutput("one") },
+        { version: 1, seq: 2, is_output: false, content: userInput("second") },
+        { version: 1, seq: 3, is_output: true, content: assistantOutput("two") },
+        { version: 2, seq: 0, is_output: false, summary: true, content: userInput("summary") },
+        { version: 2, seq: 1, is_output: false, content: userInput("second") },
+        { version: 2, seq: 2, is_output: true, content: assistantOutput("two") },
+      ],
+      responses: [
+        { id: "resp_1", version: 1, item_count: 2 },
+        { id: "resp_2", version: 2, item_count: 3 },
+      ],
+    });
+
+    expect(turns.get("resp_1")?.inputs).toEqual([userInput("first")]);
+    expect(turns.get("resp_2")?.inputs).toEqual([userInput("second")]);
+    expect(turns.get("resp_2")?.outputs).toEqual([assistantOutput("two")]);
+  });
+
   it("keys turns by the advertised id the store matched", () => {
     const turns = storedTurnsByResponse({
       items: [

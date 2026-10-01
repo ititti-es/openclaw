@@ -237,6 +237,23 @@ describe("server-owned Responses history (loopback server, no SDK mocking)", () 
     }
   });
 
+  it("names the endpoint's compaction policy on every request", async () => {
+    const server = new ScriptedResponsesServer([() => completedFrame("resp_1", "answer")]);
+    const baseUrl = await server.listen();
+    try {
+      const base = customEndpointModel(baseUrl);
+      const model = {
+        ...base,
+        compat: { ...base.compat, responsesCompactionPolicy: "openclaw" },
+      } as Model<"openai-responses">;
+      await run(model, { messages: [userMessage("hi", 1)], tools: [] }, "compaction-policy");
+
+      expect(server.requests[0]?.metadata).toMatchObject({ compaction_policy: "openclaw" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("sends the whole transcript on the first turn", async () => {
     const server = new ScriptedResponsesServer([() => completedFrame("resp_1", "first answer")]);
     const baseUrl = await server.listen();

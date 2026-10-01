@@ -604,6 +604,13 @@ export interface OpenAIResponsesCompat {
    * Default: false.
    */
   responsesHistoryOwnedByServer?: boolean;
+  /**
+   * Compaction policy the endpoint applies to this route's stored sessions,
+   * sent as `metadata.compaction_policy` on every request. Only meaningful with
+   * `responsesHistoryOwnedByServer`, where the endpoint, not OpenClaw, compacts
+   * the history it replays (for example LiteLLM's `openclaw` policy).
+   */
+  responsesCompactionPolicy?: string;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

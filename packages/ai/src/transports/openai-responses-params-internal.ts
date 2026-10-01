@@ -256,6 +256,12 @@ export function buildOpenAIResponsesParams(
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
+  const compactionPolicy = (model.compat as { responsesCompactionPolicy?: unknown } | undefined)
+    ?.responsesCompactionPolicy;
+  if (typeof compactionPolicy === "string" && compactionPolicy.length > 0) {
+    // The endpoint owns this route's history, so it also owns compacting it.
+    params.metadata = { ...params.metadata, compaction_policy: compactionPolicy };
+  }
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
     // Responses rejects output budgets below 16 tokens.

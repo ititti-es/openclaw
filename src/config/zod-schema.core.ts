@@ -252,6 +252,8 @@ const ModelCompatSchema = z
     supportsResponsesContinuation: z.boolean().optional(),
     /** The stored-continuation endpoint owns conversation history; requests never replay the local transcript. */
     responsesHistoryOwnedByServer: z.boolean().optional(),
+    /** Compaction policy the endpoint applies to its stored sessions for this model (server-owned history). */
+    responsesCompactionPolicy: z.string().min(1).optional(),
     /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
     supportsDeveloperRole: z.boolean().optional(),
     /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
