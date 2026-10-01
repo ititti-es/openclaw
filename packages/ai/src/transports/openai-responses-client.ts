@@ -351,6 +351,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params = continuationClaim.fullRequest as typeof params;
           }
         }
+        if (config.httpContinuation && !websocketMode) {
+          emitModelTransportDebug(
+            log,
+            `[responses] http_continuation provider=${model.provider} api=${model.api} model=${model.id} ` +
+              `eligible=${httpContinuationEligible} store=${params.store === true} ` +
+              `sessionIdHash=${redactIdentifier(sessionId)} ` +
+              `continuationStatus=${continuationClaim?.continuationStatus ?? "not_claimed"}` +
+              (continuationClaim?.historyMismatch
+                ? ` mismatch=${continuationClaim.historyMismatch}`
+                : ""),
+          );
+        }
         const observePrompt = createResponsesPromptEgressObserver(
           responsesOptions,
           context.systemPrompt,
