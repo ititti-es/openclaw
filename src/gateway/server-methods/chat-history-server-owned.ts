@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth-provider.js";
+import { stripUserEnvelopeForDisplay } from "../../auto-reply/reply/user-envelope-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /**
@@ -14,6 +15,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
  * messages and tool results before it are joined, in order, to that
  * response's input items. Anything that cannot be joined exactly keeps its
  * local content, so a partial or unreachable store never hides history.
+ *
+ * The store keys turns by the provider's own response id, while OpenClaw holds
+ * the id the endpoint advertised (which a gateway may encrypt). The request
+ * names the advertised ids on the page, and the endpoint returns each stored
+ * response it matched with that id as `client_id`.
  */
 
 const SESSION_ITEMS_TIMEOUT_MS = 5_000;
@@ -22,7 +28,7 @@ type Item = Record<string, unknown>;
 export type StoredTurn = { inputs: Item[]; outputs: Item[] };
 type SessionItemsResponse = {
   items?: Array<{ seq?: number; is_output?: boolean; content?: unknown }>;
-  responses?: Array<{ id?: string; item_count?: number }>;
+  responses?: Array<{ id?: string; client_id?: string; item_count?: number }>;
 };
 
 export type ServerOwnedHistoryRoute = { provider: string; modelId: string; baseUrl: string };
@@ -58,6 +64,7 @@ export async function fetchServerOwnedSessionTurns(params: {
   cfg: OpenClawConfig;
   route: ServerOwnedHistoryRoute;
   sessionId: string;
+  responseIds: string[];
   signal?: AbortSignal;
 }): Promise<Map<string, StoredTurn> | undefined> {
   const auth = await resolveApiKeyForProviderCore({
@@ -74,7 +81,9 @@ export async function fetchServerOwnedSessionTurns(params: {
   const url = `${baseUrl}/sessions/${encodeURIComponent(params.sessionId)}/items`;
   const timeout = AbortSignal.timeout(SESSION_ITEMS_TIMEOUT_MS);
   const response = await fetch(url, {
-    headers: { authorization: `Bearer ${auth.apiKey}` },
+    method: "POST",
+    headers: { authorization: `Bearer ${auth.apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ response_ids: params.responseIds }),
     signal: params.signal ? AbortSignal.any([params.signal, timeout]) : timeout,
   });
   if (response.status === 404) {
@@ -86,7 +95,7 @@ export async function fetchServerOwnedSessionTurns(params: {
   return storedTurnsByResponse((await response.json()) as SessionItemsResponse);
 }
 
-/** Split a stored transcript into the turns each response id completed. */
+/** Split a stored transcript into turns, keyed by the advertised id when the store matched one. */
 export function storedTurnsByResponse(body: SessionItemsResponse): Map<string, StoredTurn> {
   const items = [...(body.items ?? [])].toSorted((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   const responses = [...(body.responses ?? [])].toSorted(
@@ -96,7 +105,8 @@ export function storedTurnsByResponse(body: SessionItemsResponse): Map<string, S
   let start = 0;
   for (const response of responses) {
     const end = response.item_count ?? start;
-    if (typeof response.id !== "string" || end <= start) {
+    const key = response.client_id ?? response.id;
+    if (typeof key !== "string" || end <= start) {
       continue;
     }
     const turn: StoredTurn = { inputs: [], outputs: [] };
@@ -106,7 +116,7 @@ export function storedTurnsByResponse(body: SessionItemsResponse): Map<string, S
         (item.is_output ? turn.outputs : turn.inputs).push(content);
       }
     }
-    turns.set(response.id, turn);
+    turns.set(key, turn);
     start = end;
   }
   return turns;
@@ -130,7 +140,9 @@ function storedUserText(item: Item): string | undefined {
   if (item.type !== "message" || item.role !== "user") {
     return undefined;
   }
-  const text = stripInternalRuntimeContext(textParts(item.content).join("\n")).trim();
+  // The model saw the delivery envelope (timestamp, channel); the transcript shows the bare text.
+  const sent = stripInternalRuntimeContext(textParts(item.content).join("\n")).trim();
+  const text = stripUserEnvelopeForDisplay(sent).trim();
   return text.length > 0 ? text : undefined;
 }
 
@@ -294,8 +306,21 @@ export async function overlayServerOwnedHistoryPage<TPage extends { messages: un
     return page;
   }
   const log = context.logGateway;
+  const responseIds = page.messages.flatMap((message) => {
+    const responseId = asOptionalRecord(message)?.responseId;
+    return typeof responseId === "string" ? [responseId] : [];
+  });
+  if (responseIds.length === 0) {
+    return page;
+  }
   try {
-    const turns = await fetchServerOwnedSessionTurns({ cfg, route, sessionId, signal });
+    const turns = await fetchServerOwnedSessionTurns({
+      cfg,
+      route,
+      sessionId,
+      responseIds,
+      signal,
+    });
     if (!turns) {
       log.debug(`chat history: no stored session for provider=${route.provider}`);
       return page;

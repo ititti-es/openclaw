@@ -23,7 +23,7 @@ function assistantOutput(text: string) {
 
 const stored = storedTurnsByResponse({
   items: [
-    { seq: 0, is_output: false, content: userInput("server question") },
+    { seq: 0, is_output: false, content: userInput("[Thu 2026-10-01 17:40 CDT] server question") },
     { seq: 1, is_output: false, content: userInput(carrier) },
     {
       seq: 2,
@@ -120,6 +120,18 @@ describe("server-owned chat history", () => {
     ]);
     expect(pending).toBe(local[7]);
     expect(replaced).toBe(6);
+  });
+
+  it("keys turns by the advertised id the store matched", () => {
+    const turns = storedTurnsByResponse({
+      items: [
+        { seq: 0, is_output: false, content: userInput("q") },
+        { seq: 1, is_output: true, content: assistantOutput("a") },
+      ],
+      responses: [{ id: "provider-id", client_id: "resp_advertised", item_count: 2 }],
+    });
+
+    expect([...turns.keys()]).toEqual(["resp_advertised"]);
   });
 
   it("keeps local content when a turn cannot be joined exactly", () => {

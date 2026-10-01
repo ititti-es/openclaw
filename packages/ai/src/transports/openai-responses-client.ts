@@ -67,7 +67,10 @@ import {
   responsesRequestLifecycle,
   withResponsesRequestAcceptance,
 } from "./openai-responses-request-lifecycle.js";
-import { resolveServerOwnedHistoryRequest } from "./openai-responses-server-history.js";
+import {
+  dropAnchorOutputItems,
+  resolveServerOwnedHistoryRequest,
+} from "./openai-responses-server-history.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
 import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
@@ -313,7 +316,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               replayMode,
             ),
           );
-          return delta ? { ...request, previous_response_id: delta.previousResponseId } : request;
+          return delta
+            ? {
+                ...request,
+                input: dropAnchorOutputItems(request.input),
+                previous_response_id: delta.previousResponseId,
+              }
+            : request;
         };
         let params = await buildRequest("checkpoint");
         const asyncTools =

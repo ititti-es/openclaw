@@ -10,6 +10,11 @@ import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-
  * so it survives gateway restarts and idle periods. Everything after that turn
  * (the new user message, tool results, per-turn context) is the only history
  * sent; the endpoint replays the rest from its own store.
+ *
+ * The context still starts at the anchor turn: tool results are only
+ * converted when the tool call they answer is present, so dropping the anchor
+ * would silently drop its tool results. Its own output items are removed from
+ * the converted input instead (see `dropAnchorOutputItems`).
  */
 export type ServerOwnedHistoryRequest = {
   context: Context;
@@ -51,14 +56,37 @@ export function resolveServerOwnedHistoryRequest(
       // A failed or foreign turn was never stored as a continuation point here.
       return undefined;
     }
-    const tail = context.messages.slice(index + 1);
-    if (tail.length === 0) {
+    if (index === context.messages.length - 1) {
       return undefined;
     }
     return {
-      context: { ...context, messages: tail },
+      context: { ...context, messages: context.messages.slice(index) },
       previousResponseId: message.responseId as string,
     };
   }
   return undefined;
+}
+
+const ANCHOR_OUTPUT_ITEM_TYPES = new Set(["reasoning", "function_call", "custom_tool_call"]);
+
+/**
+ * Remove the items converted from the anchor assistant turn: the endpoint
+ * already holds them as the output of `previous_response_id`.
+ */
+export function dropAnchorOutputItems<T>(input: T): T {
+  if (!Array.isArray(input)) {
+    return input;
+  }
+  let start = 0;
+  while (start < input.length) {
+    const item = input[start] as { type?: unknown; role?: unknown } | undefined;
+    const isAnchorOutput =
+      (typeof item?.type === "string" && ANCHOR_OUTPUT_ITEM_TYPES.has(item.type)) ||
+      (item?.role === "assistant" && (item.type === "message" || item.type === undefined));
+    if (!isAnchorOutput) {
+      break;
+    }
+    start += 1;
+  }
+  return input.slice(start) as T;
 }
