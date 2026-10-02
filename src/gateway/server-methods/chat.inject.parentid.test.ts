@@ -225,6 +225,58 @@ describe("gateway chat.inject transcript writes", () => {
     },
   );
 
+  it("records a continuation anchor as that route's stored response", async () => {
+    const fixture = await createSqliteTranscriptFixture({
+      prefix: "openclaw-chat-inject-continuation-",
+      sessionId: "sess-continuation",
+    });
+
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        agentId: fixture.agentId,
+        sessionId: fixture.sessionId,
+        sessionKey: fixture.sessionKey,
+        storePath: fixture.storePath,
+        message: "Continuing from the imported conversation.",
+        continuation: { provider: "liminal", model: "composer-2.5", responseId: "resp_imp_1" },
+      });
+      const last = (await readLastTranscriptRecord(fixture)) as {
+        message?: Record<string, unknown>;
+      };
+
+      expect(appended.ok).toBe(true);
+      expect(last.message).toMatchObject({
+        role: "assistant",
+        api: "openai-responses",
+        provider: "liminal",
+        model: "composer-2.5",
+        responseId: "resp_imp_1",
+        stopReason: "stop",
+      });
+    } finally {
+      await cleanupFixture(fixture);
+    }
+  });
+
+  it("keeps plain injected turns out of model continuation", async () => {
+    const fixture = await createSqliteTranscriptFixture({
+      prefix: "openclaw-chat-inject-plain-",
+      sessionId: "sess-plain",
+    });
+
+    try {
+      await appendHelloAndRequireId(fixture);
+      const last = (await readLastTranscriptRecord(fixture)) as {
+        message?: Record<string, unknown>;
+      };
+
+      expect(last.message).toMatchObject({ provider: "openclaw", model: "gateway-injected" });
+      expect(last.message).not.toHaveProperty("responseId");
+    } finally {
+      await cleanupFixture(fixture);
+    }
+  });
+
   it("preserves parent links after an oversized transcript row", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-large-",

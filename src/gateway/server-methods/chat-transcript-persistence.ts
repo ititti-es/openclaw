@@ -366,6 +366,7 @@ export async function appendAssistantTranscriptMessage(
     message: params.message,
     label: params.label,
     content: params.content,
+    continuation: params.continuation,
     idempotencyKey: params.idempotencyKey,
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,
