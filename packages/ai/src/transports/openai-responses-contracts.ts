@@ -101,6 +101,17 @@ export function isPreviousResponseRejection(error: { code?: unknown; param?: unk
   );
 }
 
+// A LiteLLM-style proxy refuses a response id it cannot vouch for (one it did not
+// issue, or no longer holds) with a 403 or 404 that names the response id instead
+// of OpenAI's error code. Over HTTP that is the same refusal, before any output.
+export function isProxyResponseIdRefusal(error: { status?: unknown; message?: unknown }): boolean {
+  return (
+    (error.status === 403 || error.status === 404) &&
+    typeof error.message === "string" &&
+    /response id/i.test(error.message)
+  );
+}
+
 export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
   if (!isRecord(cause)) {
     return undefined;
