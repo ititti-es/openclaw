@@ -105,6 +105,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               sessionKey,
               message: p.message,
               label: p.label,
+              ...(p.continuation ? { continuation: p.continuation } : {}),
               sessionId,
               storePath,
               agentId,

@@ -337,11 +337,24 @@ export const ChatAbortParamsSchema = closedObject({
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */
+/**
+ * Marks an injected assistant turn as a stored Responses turn, so a route whose
+ * endpoint owns history (`compat.responsesHistoryOwnedByServer`) continues from
+ * `responseId` on the next request. Used to attach a session to a conversation
+ * that was imported into the endpoint's store.
+ */
+export const ChatInjectContinuationSchema = closedObject({
+  provider: NonEmptyString,
+  model: NonEmptyString,
+  responseId: NonEmptyString,
+});
+
 export const ChatInjectParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   message: NonEmptyString,
   label: Type.Optional(Type.String({ maxLength: 100 })),
+  continuation: Type.Optional(ChatInjectContinuationSchema),
 });
 
 /** Shared event fields preserve stream ordering and route events to the right session. */

@@ -68,6 +68,17 @@ function resolveInjectedAssistantContent(params: {
 }
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
+/**
+ * A stored Responses turn an injected message stands for. The next request on a
+ * server-owned-history route sends `responseId` as `previous_response_id`, so the
+ * endpoint replays the conversation it holds instead of the local transcript.
+ */
+export type InjectedContinuationAnchor = {
+  provider: string;
+  model: string;
+  responseId: string;
+};
+
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath?: string;
   storePath?: string;
@@ -80,6 +91,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
+  /** When set, the turn is recorded as that route's stored response instead of a Gateway note. */
+  continuation?: InjectedContinuationAnchor;
   idempotencyKey?: string;
   stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
@@ -130,10 +143,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     // keep their replayable default and carry cancellation in openclawAbort.
     stopReason: params.stopReason ?? "stop",
     usage,
-    // Make these explicit so downstream tooling never treats this as model output.
+    // Make these explicit so downstream tooling never treats this as model output,
+    // unless the caller anchors the session to a turn its endpoint already stores.
     api: "openai-responses",
-    provider: "openclaw",
-    model: "gateway-injected",
+    provider: params.continuation?.provider ?? "openclaw",
+    model: params.continuation?.model ?? "gateway-injected",
+    ...(params.continuation ? { responseId: params.continuation.responseId } : {}),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.contextFreeCommand === true

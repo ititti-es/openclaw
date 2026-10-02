@@ -35,6 +35,7 @@ import {
 import {
   appendInjectedAssistantMessageToTranscript,
   type GatewayInjectedTtsSupplementMarker,
+  type InjectedContinuationAnchor,
 } from "./chat-transcript-inject.js";
 
 type TranscriptAppendResult = {
@@ -363,6 +364,7 @@ export async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
+  continuation?: InjectedContinuationAnchor;
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
@@ -396,6 +398,7 @@ export async function appendAssistantTranscriptMessage(params: {
     message: params.message,
     label: params.label,
     content: params.content,
+    continuation: params.continuation,
     idempotencyKey: params.idempotencyKey,
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,

@@ -4168,22 +4168,47 @@ public struct ChatHistoryResetResult: Codable, Sendable {
     }
 }
 
+public struct ChatInjectContinuation: Codable, Sendable {
+    public let provider: String
+    public let model: String
+    public let responseid: String
+
+    public init(
+        provider: String,
+        model: String,
+        responseid: String)
+    {
+        self.provider = provider
+        self.model = model
+        self.responseid = responseid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case model
+        case responseid = "responseId"
+    }
+}
+
 public struct ChatInjectParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let message: String
     public let label: String?
+    public let continuation: ChatInjectContinuation?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         message: String,
-        label: String? = nil)
+        label: String? = nil,
+        continuation: ChatInjectContinuation? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.message = message
         self.label = label
+        self.continuation = continuation
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4191,6 +4216,7 @@ public struct ChatInjectParams: Codable, Sendable {
         case agentid = "agentId"
         case message
         case label
+        case continuation
     }
 }
 
