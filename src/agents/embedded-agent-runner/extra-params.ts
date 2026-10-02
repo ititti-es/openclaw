@@ -10,6 +10,7 @@ import {
 } from "../../agents/codex-native-web-search-core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
+import { createLocalEndpointIdentityHeadersWrapper } from "../../llm/providers/stream-wrappers/local-identity-headers.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
 import {
   createSiliconFlowThinkingWrapper,
@@ -810,6 +811,7 @@ export function applyExtraParamsToAgent(
     ...wrapperContext,
     providerWrapperHandled,
   });
+  agent.streamFn = createLocalEndpointIdentityHeadersWrapper(agent.streamFn, agentId);
 
   return { effectiveExtraParams, nativeWebSearchAllowedByToolPolicy };
 }
