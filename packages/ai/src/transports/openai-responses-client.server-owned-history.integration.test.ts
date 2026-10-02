@@ -27,12 +27,14 @@ function attachModelProviderRequestTransport<TModel extends object>(
 // nothing here mocks the `openai` SDK: requests leave the process over a real
 // socket and come back as real "text/event-stream" bytes, so this proves the
 // wire behavior rather than an intercepted SDK call.
+type ErrorReply = { status: number; body: unknown };
+
 class ScriptedResponsesServer {
   readonly requests: Array<Record<string, unknown>> = [];
-  private readonly script: Array<(request: Record<string, unknown>) => string>;
+  private readonly script: Array<(request: Record<string, unknown>) => string | ErrorReply>;
   private server: Server | undefined;
 
-  constructor(script: Array<(request: Record<string, unknown>) => string>) {
+  constructor(script: Array<(request: Record<string, unknown>) => string | ErrorReply>) {
     this.script = script;
   }
 
@@ -55,8 +57,14 @@ class ScriptedResponsesServer {
           );
           return;
         }
+        const reply = frame(parsed);
+        if (typeof reply !== "string") {
+          res.writeHead(reply.status, { "content-type": "application/json" });
+          res.end(JSON.stringify(reply.body));
+          return;
+        }
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-        res.write(`data: ${frame(parsed)}\n\n`);
+        res.write(`data: ${reply}\n\n`);
         res.end();
       });
     });
@@ -348,6 +356,48 @@ describe("server-owned Responses history (loopback server, no SDK mocking)", () 
       expect(sent).toContain("kept question");
       expect(sent).toContain("now");
       expect(sent).not.toContain('"text":""');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("resends the full transcript when the proxy refuses the stored response id", async () => {
+    const server = new ScriptedResponsesServer([
+      () => ({
+        status: 403,
+        body: {
+          error: {
+            message:
+              "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it.",
+            type: "permission_error",
+            param: null,
+            code: "403",
+          },
+        },
+      }),
+      () => completedFrame("resp_2", "second answer"),
+    ]);
+    const baseUrl = await server.listen();
+    try {
+      const model = customEndpointModel(baseUrl);
+      const result = await run(
+        model,
+        {
+          messages: [
+            userMessage("first question", 1),
+            assistantTurn(model, "resp_unknown", "first answer"),
+            userMessage("second question", 3),
+          ],
+          tools: [],
+        },
+        "refused-response-id",
+      );
+
+      expect(server.requests).toHaveLength(2);
+      expect(server.requests[0]).toMatchObject({ previous_response_id: "resp_unknown" });
+      expect(server.requests[1]).not.toHaveProperty("previous_response_id");
+      expect(JSON.stringify(server.requests[1]?.input)).toContain("first question");
+      expect(result.stopReason).toBe("stop");
     } finally {
       await server.close();
     }

@@ -7,6 +7,7 @@ import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   isPreviousResponseRejection,
+  isProxyResponseIdRefusal,
   type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -231,7 +232,8 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
           error &&
           typeof error === "object" &&
           typeof (error as { status?: unknown }).status === "number" &&
-          isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
+          (isPreviousResponseRejection(error as { code?: unknown; param?: unknown }) ||
+            isProxyResponseIdRefusal(error as { status?: unknown; message?: unknown }))
         ) {
           const request = {
             ...(params.buildFullHistoryRequest
