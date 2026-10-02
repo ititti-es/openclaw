@@ -255,6 +255,8 @@ const ModelCompatSchema = z
     responsesHistoryOwnedByServer: z.boolean().optional(),
     /** Compaction policy the endpoint applies to its stored sessions for this model (server-owned history). */
     responsesCompactionPolicy: z.string().min(1).optional(),
+    /** Let maintenance empty local message content the history-owning endpoint already holds. */
+    responsesPruneLocalContent: z.boolean().optional(),
     /** Whether the provider supports the `developer` role (vs `system`). Default: auto-detected from URL. */
     supportsDeveloperRole: z.boolean().optional(),
     /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */

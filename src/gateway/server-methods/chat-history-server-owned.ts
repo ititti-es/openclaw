@@ -1,3 +1,4 @@
+import { SERVER_OWNED_CONTENT_MARKER } from "@openclaw/ai/transports";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth-provider.js";
@@ -37,7 +38,15 @@ type SessionItemsResponse = {
   responses?: Array<{ id?: string; client_id?: string; version?: number; item_count?: number }>;
 };
 
-export type ServerOwnedHistoryRoute = { provider: string; modelId: string; baseUrl: string };
+export type ServerOwnedHistoryRoute = {
+  provider: string;
+  modelId: string;
+  baseUrl: string;
+  /** Maintenance may empty local content the endpoint holds (`responsesPruneLocalContent`). */
+  pruneLocalContent: boolean;
+};
+
+const UNAVAILABLE_SERVER_CONTENT = "(Stored on the model gateway. Not available right now.)";
 
 export function resolveServerOwnedHistoryRoute(
   cfg: OpenClawConfig,
@@ -63,7 +72,9 @@ export function resolveServerOwnedHistoryRoute(
       : typeof providerConfig?.baseUrl === "string"
         ? providerConfig.baseUrl
         : undefined;
-  return baseUrl ? { provider, modelId, baseUrl } : undefined;
+  return baseUrl
+    ? { provider, modelId, baseUrl, pruneLocalContent: compat.responsesPruneLocalContent === true }
+    : undefined;
 }
 
 export async function fetchServerOwnedSessionTurns(params: {
@@ -259,13 +270,13 @@ function markServerContent(message: Item): Item {
 export function overlayServerOwnedContent(
   messages: readonly unknown[],
   turns: ReadonlyMap<string, StoredTurn>,
-): { messages: unknown[]; replaced: number } {
+): { messages: unknown[]; replaced: number; replacedIndices: number[] } {
   const result = [...messages];
-  let replaced = 0;
+  const replacedIndices: number[] = [];
   const replaceAt = (index: number, next: Item | undefined) => {
     if (next) {
       result[index] = markServerContent(next);
-      replaced += 1;
+      replacedIndices.push(index);
     }
   };
   let segment: number[] = [];
@@ -303,7 +314,39 @@ export function overlayServerOwnedContent(
       );
     }
   }
-  return { messages: result, replaced };
+  replacedIndices.sort((a, b) => a - b);
+  const replaced = new Set(replacedIndices);
+  return {
+    messages: result.map((message, index) =>
+      replaced.has(index) ? message : withUnavailablePlaceholder(message),
+    ),
+    replaced: replacedIndices.length,
+    replacedIndices,
+  };
+}
+
+/**
+ * A message whose local content was emptied in favor of the endpoint, shown
+ * while the endpoint cannot supply it, says so instead of rendering blank.
+ */
+export function withUnavailablePlaceholder(message: unknown): unknown {
+  const record = asOptionalRecord(message);
+  if (record?.[SERVER_OWNED_CONTENT_MARKER] !== true) {
+    return message;
+  }
+  if (typeof record.content === "string") {
+    return { ...record, content: UNAVAILABLE_SERVER_CONTENT };
+  }
+  if (!Array.isArray(record.content)) {
+    return message;
+  }
+  const index = record.content.findIndex((block) => asOptionalRecord(block)?.type === "text");
+  if (index < 0) {
+    return message;
+  }
+  const content = [...record.content];
+  content[index] = { ...asOptionalRecord(content[index]), text: UNAVAILABLE_SERVER_CONTENT };
+  return { ...record, content };
 }
 
 /**
@@ -340,7 +383,7 @@ export async function overlayServerOwnedHistoryPage<TPage extends { messages: un
     });
     if (!turns) {
       log.debug(`chat history: no stored session for provider=${route.provider}`);
-      return page;
+      return { ...page, messages: page.messages.map(withUnavailablePlaceholder) };
     }
     const overlay = overlayServerOwnedContent(page.messages, turns);
     log.debug(
@@ -352,6 +395,6 @@ export async function overlayServerOwnedHistoryPage<TPage extends { messages: un
     signal?.throwIfAborted();
     const reason = error instanceof Error ? error.message : String(error);
     log.debug(`chat history: session store unavailable provider=${route.provider}: ${reason}`);
-    return page;
+    return { ...page, messages: page.messages.map(withUnavailablePlaceholder) };
   }
 }

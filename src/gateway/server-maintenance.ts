@@ -69,6 +69,7 @@ import {
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
+import { startServerOwnedHistoryPruneMaintenance } from "./server-owned-history-prune.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
@@ -578,6 +579,14 @@ export function startGatewayMaintenanceTimers(params: {
     getRuntimeConfig: params.getRuntimeConfig,
     onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
   });
+  const serverOwnedHistoryPrune = startServerOwnedHistoryPruneMaintenance({
+    getRuntimeConfig: params.getRuntimeConfig,
+    onError: (message) => params.logHealth.error(`server-owned history prune failed: ${message}`),
+    onPruned: ({ sessions, messages }) =>
+      params.logHealth.info(
+        `server-owned history: emptied ${messages} local messages in ${sessions} sessions`,
+      ),
+  });
 
   const stopPeriodicTasks = () => {
     if (!periodicTasksStopPromise) {
@@ -586,6 +595,7 @@ export function startGatewayMaintenanceTimers(params: {
         ...periodicJobs.map((job) => job.stop()),
         telemetryJob?.stop(),
         sessionColdStorageMaintenance.stop(),
+        serverOwnedHistoryPrune.stop(),
         stopMediaCleanup(),
       ]).then((results) => {
         const failures = results.flatMap((result) =>

@@ -614,6 +614,12 @@ export interface OpenAIResponsesCompat {
    * the history it replays (for example LiteLLM's `openclaw` policy).
    */
   responsesCompactionPolicy?: string;
+  /**
+   * With `responsesHistoryOwnedByServer`: let Gateway maintenance empty the
+   * local copy of message content the endpoint already holds and can return.
+   * The endpoint becomes the only copy of that content. Default: false.
+   */
+  responsesPruneLocalContent?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

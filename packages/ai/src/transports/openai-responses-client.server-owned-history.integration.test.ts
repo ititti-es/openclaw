@@ -293,6 +293,66 @@ describe("server-owned Responses history (loopback server, no SDK mocking)", () 
     }
   });
 
+  it("continues from the last stored turn when a later turn failed", async () => {
+    const server = new ScriptedResponsesServer([() => completedFrame("resp_3", "answer")]);
+    const baseUrl = await server.listen();
+    try {
+      const model = customEndpointModel(baseUrl);
+      await run(
+        model,
+        {
+          messages: [
+            userMessage("first question", 1),
+            assistantTurn(model, "resp_1", "first answer"),
+            userMessage("second question", 3),
+            assistantTurn(model, undefined, "partial", "aborted"),
+            userMessage("retry", 5),
+          ],
+          tools: [],
+        },
+        "failed-later-turn",
+      );
+
+      expect(server.requests[0]).toMatchObject({ previous_response_id: "resp_1" });
+      const sent = JSON.stringify(server.requests[0]?.input);
+      expect(sent).toContain("second question");
+      expect(sent).toContain("retry");
+      expect(sent).not.toContain("first question");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("leaves emptied messages out of a full replay", async () => {
+    const server = new ScriptedResponsesServer([() => completedFrame("resp_3", "answer")]);
+    const baseUrl = await server.listen();
+    try {
+      const model = customEndpointModel(baseUrl);
+      await run(
+        model,
+        {
+          messages: [
+            { ...userMessage("", 1), serverOwnedContent: true },
+            { ...assistantTurn(model, "resp_1", ""), serverOwnedContent: true },
+            userMessage("kept question", 3),
+            { ...assistantTurn(model, "resp_x", "foreign answer"), provider: "elsewhere" },
+            userMessage("now", 5),
+          ],
+          tools: [],
+        } as Context,
+        "emptied-replay",
+      );
+
+      expect(server.requests[0]).not.toHaveProperty("previous_response_id");
+      const sent = JSON.stringify(server.requests[0]?.input);
+      expect(sent).toContain("kept question");
+      expect(sent).toContain("now");
+      expect(sent).not.toContain('"text":""');
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps the stateless path for routes that do not own history", async () => {
     const server = new ScriptedResponsesServer([() => completedFrame("resp_2", "answer")]);
     const baseUrl = await server.listen();

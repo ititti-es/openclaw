@@ -21,6 +21,12 @@ export type ServerOwnedHistoryRequest = {
   previousResponseId: string;
 };
 
+/**
+ * Set on a transcript message whose content the Gateway emptied because the
+ * history-owning endpoint holds it (`compat.responsesPruneLocalContent`).
+ */
+export const SERVER_OWNED_CONTENT_MARKER = "serverOwnedContent";
+
 export function usesServerOwnedResponsesHistory(model: Model): boolean {
   const compat = model.compat as { responsesHistoryOwnedByServer?: boolean } | undefined;
   return (
@@ -29,15 +35,8 @@ export function usesServerOwnedResponsesHistory(model: Model): boolean {
   );
 }
 
-function isContinuableTurn(message: AssistantMessage, model: Model): boolean {
-  return (
-    typeof message.responseId === "string" &&
-    message.responseId.length > 0 &&
-    message.provider === model.provider &&
-    message.api === model.api &&
-    message.stopReason !== "error" &&
-    message.stopReason !== "aborted"
-  );
+function isFailedTurn(message: AssistantMessage): boolean {
+  return message.stopReason === "error" || message.stopReason === "aborted";
 }
 
 export function resolveServerOwnedHistoryRequest(
@@ -52,11 +51,19 @@ export function resolveServerOwnedHistoryRequest(
     if (message?.role !== "assistant") {
       continue;
     }
-    if (!isContinuableTurn(message, model)) {
-      // A failed or foreign turn was never stored as a continuation point here.
+    if (message.provider !== model.provider || message.api !== model.api) {
+      // A foreign turn was never stored as a continuation point here.
       return undefined;
     }
-    if (index === context.messages.length - 1) {
+    if (isFailedTurn(message)) {
+      // Not stored either: continue from the turn before it, which still sends
+      // everything after that turn.
+      continue;
+    }
+    if (typeof message.responseId !== "string" || message.responseId.length === 0) {
+      return undefined;
+    }
+    if (!context.messages.slice(index + 1).some((next) => next.role !== "assistant")) {
       return undefined;
     }
     return {
@@ -65,6 +72,19 @@ export function resolveServerOwnedHistoryRequest(
     };
   }
   return undefined;
+}
+
+/**
+ * Context for a request that replays history without a continuation point.
+ * Everything up to the last message whose content was emptied is left out:
+ * the endpoint holds it, and an emptied turn tells the model nothing.
+ */
+export function withoutServerOwnedContent(context: Context): Context {
+  const last = context.messages.findLastIndex(
+    (message) =>
+      (message as unknown as Record<string, unknown>)[SERVER_OWNED_CONTENT_MARKER] === true,
+  );
+  return last < 0 ? context : { ...context, messages: context.messages.slice(last + 1) };
 }
 
 const ANCHOR_OUTPUT_ITEM_TYPES = new Set(["reasoning", "function_call", "custom_tool_call"]);

@@ -25,6 +25,7 @@ export * from "./transports/provider-transport-stream.js";
 export * from "./transports/responses-image-payload-sanitizer.js";
 export * from "./transports/simple-completion-transport.js";
 export * from "./transports/transport-stream-shared.js";
+export { SERVER_OWNED_CONTENT_MARKER } from "./transports/openai-responses-server-history.js";
 export {
   isCodeModeModelVisibleToolName,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
