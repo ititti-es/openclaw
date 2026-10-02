@@ -69,6 +69,8 @@ import {
 import {
   dropAnchorOutputItems,
   resolveServerOwnedHistoryRequest,
+  usesServerOwnedResponsesHistory,
+  withoutServerOwnedContent,
 } from "./openai-responses-server-history.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
 import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
@@ -307,10 +309,15 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             serverHistory && replayMode !== "full-history" && requestContext === context
               ? serverHistory
               : undefined;
+          const replayContext =
+            delta?.context ??
+            (usesServerOwnedResponsesHistory(model)
+              ? withoutServerOwnedContent(requestContext)
+              : requestContext);
           const request = await prepareRequest(
             config.buildRequest(
               model,
-              delta?.context ?? requestContext,
+              replayContext,
               responsesOptions,
               turnState?.metadata,
               replayMode,

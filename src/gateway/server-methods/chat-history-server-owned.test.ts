@@ -197,6 +197,14 @@ describe("server-owned chat history", () => {
                 },
               },
               { id: "stateless", compat: { supportsResponsesContinuation: true } },
+              {
+                id: "pruned",
+                compat: {
+                  supportsResponsesContinuation: true,
+                  responsesHistoryOwnedByServer: true,
+                  responsesPruneLocalContent: true,
+                },
+              },
             ],
           },
         },
@@ -207,7 +215,9 @@ describe("server-owned chat history", () => {
       provider: "liminal",
       modelId: "owned",
       baseUrl: "http://127.0.0.1:4000/v1",
+      pruneLocalContent: false,
     });
+    expect(resolveServerOwnedHistoryRoute(cfg, "liminal", "pruned")?.pruneLocalContent).toBe(true);
     expect(resolveServerOwnedHistoryRoute(cfg, "liminal", "stateless")).toBeUndefined();
     expect(resolveServerOwnedHistoryRoute(cfg, "other", "owned")).toBeUndefined();
   });
