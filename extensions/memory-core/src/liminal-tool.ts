@@ -38,15 +38,19 @@ export type ConversationRecall = {
   ) => MemorySearchToolResult;
 };
 
-/** The recall config this tool call may use, or null (disabled, sandboxed, group chat, or scoped recall). */
+/** The recall config this tool call may use, or null (disabled, not the owner, sandboxed, group, scoped). */
 export function resolveConversationRecall(
   cfg: OpenClawConfig,
-  options: MemoryToolOptions,
+  options: Pick<
+    MemoryToolOptions,
+    "agentSessionKey" | "sandboxed" | "conversationRecall" | "senderIsOwner"
+  >,
 ): LiminalRecallConfig | null {
   return resolveLiminalRecallForSession(cfg, {
     sessionKey: options.agentSessionKey,
     sandboxed: options.sandboxed,
     scopedRecall: options.conversationRecall !== undefined,
+    senderIsOwner: options.senderIsOwner,
   });
 }
 

@@ -122,14 +122,24 @@ export function resolveLiminalRecallConfig(
 }
 
 /**
- * Recall spans every private conversation the user has had, so it is limited to direct, unsandboxed
- * sessions without a trusted-runtime recall scope; group and channel sessions keep the workspace notes only.
+ * Recall spans every private conversation the user has had, so it is limited to turns the runtime marks as
+ * the owner's, in direct, unsandboxed sessions without a trusted-runtime recall scope. Everyone else (other
+ * senders, group and channel sessions) keeps the workspace notes only.
  */
 export function resolveLiminalRecallForSession(
   cfg: OpenClawConfig | undefined,
-  session: { sessionKey?: string; sandboxed?: boolean; scopedRecall?: boolean },
+  session: {
+    sessionKey?: string;
+    sandboxed?: boolean;
+    scopedRecall?: boolean;
+    senderIsOwner?: boolean;
+  },
 ): LiminalRecallConfig | null {
-  if (session.sandboxed === true || session.scopedRecall === true) {
+  if (
+    session.senderIsOwner !== true ||
+    session.sandboxed === true ||
+    session.scopedRecall === true
+  ) {
     return null;
   }
   const rest = parseAgentSessionKey(session.sessionKey)?.rest?.toLowerCase();

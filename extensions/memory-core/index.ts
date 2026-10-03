@@ -172,6 +172,7 @@ function resolveMemoryToolOptions(
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
     activeProjectKeys: ctx.activeProjectKeys,
+    ...(ctx.senderIsOwner !== undefined ? { senderIsOwner: ctx.senderIsOwner } : {}),
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
   };
 }

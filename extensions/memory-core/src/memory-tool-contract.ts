@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
-import { resolveLiminalRecallConfig } from "./liminal-recall.js";
+import { resolveLiminalRecallForSession } from "./liminal-recall.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 
 export type MemoryToolOptions = {
@@ -20,6 +20,8 @@ export type MemoryToolOptions = {
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
+  /** Runtime owner bit for the turn; conversation recall is only offered to the owner. */
+  senderIsOwner?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -88,7 +90,15 @@ export function resolveMemoryToolContext(options: MemoryToolOptions) {
         cfg,
         agentId,
         settings,
-        sources: resolveMemorySourceContract(settings, resolveLiminalRecallConfig(cfg) !== null),
+        sources: resolveMemorySourceContract(
+          settings,
+          resolveLiminalRecallForSession(cfg, {
+            sessionKey: options.agentSessionKey,
+            sandboxed: options.sandboxed,
+            scopedRecall: options.conversationRecall !== undefined,
+            senderIsOwner: options.senderIsOwner,
+          }) !== null,
+        ),
       }
     : null;
 }
@@ -166,7 +176,7 @@ export function buildMemoryPromptSection(
       }. If low confidence after search, say you checked.`
     : "Before answering anything about prior work, decisions, dates, people, preferences, or todos that point to a specific memory file: run memory_get to pull only the needed lines. If low confidence after reading, say you checked.";
   const conversationGuidance = [
-    "memory_search also recalls every past conversation with the user (OpenClaw, opencode, Claude Code), ranked by relevance. For a hit whose path starts with conversation:, call memory_get with that exact path to read the messages around it. Do not use sessions_search for recall.",
+    "For the owner, memory_search also recalls past conversations from every harness (OpenClaw, opencode, Claude Code), ranked by relevance. For a hit whose path starts with conversation:, call memory_get with that exact path to read the messages around it. Prefer memory_search over sessions_search for recall.",
   ];
   const sessionGuidance = !hasMemorySearch
     ? []
