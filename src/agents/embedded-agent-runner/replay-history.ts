@@ -32,7 +32,6 @@ import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-us
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
-  normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   validateAnthropicTurns,
@@ -67,6 +66,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import { replayToolCallIdNormalizer } from "./replay-tool-call-ids.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -752,7 +752,7 @@ export async function sanitizeSessionHistory(params: {
       : sanitizedToolCalls;
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        normalizeOpenAIResponsesToolCallIds(
+        replayToolCallIdNormalizer(params.model)(
           // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
           // invalidated by a switch, every later replay must keep dropping them.
           dropStaleOpenAIReasoning(
