@@ -184,6 +184,54 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     expect(toolResult.toolCallId).toBe(toolCall?.id);
   });
 
+  it.each([
+    { ownedByServer: true, expected: /^toolu_01EPHeygGyE3fC13D29X8YE3$/ },
+    { ownedByServer: false, expected: /^call_toolu_01EPHeygGyE3fC13D29X8YE3_fc_/ },
+  ])(
+    "keeps provider tool ids only where the endpoint owns history (owned: $ownedByServer)",
+    async ({ ownedByServer, expected }) => {
+      // A history-owning gateway (liminal) stores Claude's call as toolu_*; reshaping the output to
+      // call_* left that call unanswered and the provider refused the turn.
+      const rawToolCallId = "toolu_01EPHeygGyE3fC13D29X8YE3|fc_toolu_01EPHeygGyE3fC13D29X8YE3";
+      const result = await sanitizeSessionHistory({
+        messages: [
+          castAgentMessage({
+            role: "assistant",
+            content: [{ type: "toolCall", id: rawToolCallId, name: "noop", arguments: {} }],
+          }),
+          castAgentMessage(textToolResult(rawToolCallId, "noop", "ok", { isError: false })),
+        ],
+        modelApi: "openai-responses",
+        provider: "liminal",
+        modelId: "claude-sonnet-5-5",
+        model: {
+          id: "claude-sonnet-5-5",
+          name: "Claude Sonnet 5.5",
+          provider: "liminal",
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:4000/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+          compat: {
+            supportsResponsesContinuation: true,
+            sendSessionIdHeader: true,
+            responsesHistoryOwnedByServer: ownedByServer,
+          },
+        } as never,
+        sessionManager: makeSessionManager(),
+        sessionId: "test-session",
+      });
+
+      const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
+      const toolCall = assistant.content?.find((block) => block.type === "toolCall");
+      expect(toolCall?.id).toMatch(expected);
+      expect((result[1] as { toolCallId?: string }).toolCallId).toBe(toolCall?.id);
+    },
+  );
+
   it("keeps repeated Kimi calls distinct while repairing an incomplete later turn", async () => {
     const firstRawId = "functions.gateway:0|fc_tmp_first";
     const secondRawId = "functions.gateway:0|fc_tmp_second";

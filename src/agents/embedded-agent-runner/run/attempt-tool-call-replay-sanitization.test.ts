@@ -727,3 +727,54 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
     expect(danglingResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 });
+
+describe("sanitizeOpenAIResponsesReplayForStream tool call ids", () => {
+  const usage = {
+    input: 1,
+    output: 1,
+    totalTokens: 2,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: { input: 0, output: 0, total: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const claudeCallId = "toolu_01EPHeygGyE3fC13D29X8YE3|fc_toolu_01EPHeygGyE3fC13D29X8YE3";
+  const messages = [
+    {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "liminal",
+      model: "claude-sonnet-5-5",
+      responseId: "resp_tool",
+      stopReason: "toolUse",
+      timestamp: 1,
+      usage,
+      content: [{ type: "toolCall", id: claudeCallId, name: "session_status", arguments: {} }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: claudeCallId,
+      toolName: "session_status",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: 2,
+    },
+  ] as unknown as AgentMessage[];
+
+  it("reshapes ids outside OpenAI's call_* form for a client-owned history", () => {
+    const [assistant, result] = sanitizeOpenAIResponsesReplayForStream(messages);
+    const callId = (requireAssistantMessage(assistant).content[0] as { id: string }).id;
+    expect(callId).toMatch(/^call_toolu_01EPHeygGyE3fC13D29X8YE3_fc_/);
+    expect(requireToolResultMessage(result).toolCallId).toBe(callId);
+  });
+
+  it("keeps the provider's ids when the endpoint owns the history", () => {
+    // liminal stores Claude's call as toolu_*; a call_* output left it unanswered and claude_cli
+    // refused the turn ("tool result IDs do not match pending Claude calls").
+    const [assistant, result] = sanitizeOpenAIResponsesReplayForStream(messages, {
+      preserveToolCallIds: true,
+    });
+    const callId = (requireAssistantMessage(assistant).content[0] as { id: string }).id;
+    expect(callId.split("|")[0]).toBe("toolu_01EPHeygGyE3fC13D29X8YE3");
+    expect(requireToolResultMessage(result).toolCallId).toBe(callId);
+  });
+});
