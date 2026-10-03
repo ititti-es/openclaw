@@ -415,10 +415,21 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   });
 }
 
-/** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
-export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+/**
+ * Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers.
+ *
+ * `preserveToolCallIds` is for an endpoint that owns the history: it replays each call it
+ * stored under the provider's own id (Claude `toolu_*`, xAI `call-*-0`), so a function_call_output
+ * reshaped to OpenAI's `call_*` form would no longer pair with its call.
+ */
+export function sanitizeOpenAIResponsesReplayForStream(
+  messages: AgentMessage[],
+  options: { preserveToolCallIds?: boolean } = {},
+): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return downgradeOpenAIFunctionCallReasoningPairs(normalizeOpenAIResponsesToolCallIds(repaired));
+  return downgradeOpenAIFunctionCallReasoningPairs(
+    options.preserveToolCallIds ? repaired : normalizeOpenAIResponsesToolCallIds(repaired),
+  );
 }
 
 /**

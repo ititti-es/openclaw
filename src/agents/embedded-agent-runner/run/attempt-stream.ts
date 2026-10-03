@@ -17,6 +17,7 @@ import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { keepsProviderToolCallIds } from "../replay-tool-call-ids.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -275,8 +276,12 @@ export function installEmbeddedAttemptStreamGuards(
       session.agent.streamFn,
       (checkpoint) => repairRejectedReplay("compaction", checkpoint),
     );
-    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
-      sanitizeOpenAIResponsesReplayForStream(messages),
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(
+      session.agent.streamFn,
+      (messages, model) =>
+        sanitizeOpenAIResponsesReplayForStream(messages, {
+          preserveToolCallIds: keepsProviderToolCallIds(model),
+        }),
     );
   }
 
