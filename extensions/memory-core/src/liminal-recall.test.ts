@@ -75,11 +75,13 @@ describe("resolveLiminalRecallConfig", () => {
 });
 
 describe("resolveLiminalRecallForSession", () => {
-  it("allows direct sessions and refuses sandboxed, group, channel, and scoped-recall runs", () => {
+  it("allows the owner's direct sessions and refuses others, sandboxed, group, channel, and scoped runs", () => {
     const allowed = (session: Parameters<typeof resolveLiminalRecallForSession>[1]) =>
-      resolveLiminalRecallForSession(ENABLED, session) !== null;
+      resolveLiminalRecallForSession(ENABLED, { senderIsOwner: true, ...session }) !== null;
     expect(allowed({})).toBe(true);
     expect(allowed({ sessionKey: "agent:main:main" })).toBe(true);
+    expect(allowed({ senderIsOwner: false })).toBe(false);
+    expect(allowed({ senderIsOwner: undefined })).toBe(false);
     expect(allowed({ sessionKey: "agent:main:telegram:group:123" })).toBe(false);
     expect(allowed({ sessionKey: "agent:main:discord:channel:9" })).toBe(false);
     expect(allowed({ sandboxed: true })).toBe(false);

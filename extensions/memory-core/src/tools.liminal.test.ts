@@ -67,6 +67,7 @@ async function search(
   const tool = createMemorySearchTool({
     config: cfg,
     agentSessionKey: "agent:main:main",
+    senderIsOwner: true,
     ...options,
   });
   if (!tool) {
@@ -114,7 +115,9 @@ describe("memory_search with liminal conversation recall", () => {
     expect(details.conversations).toEqual({ outcome: "ok", count: 1, reranked: true });
     expect(calls.map((call) => call.path).toSorted()).toEqual(["/memory/rerank", "/memory/search"]);
     expect(
-      (calls.find((call) => call.path === "/memory/rerank")?.body.documents as string[])[0],
+      (
+        calls.find((call) => call.path === "/memory/rerank")?.body.documents as string[] | undefined
+      )?.[0],
     ).toContain("Sett voice: clone from League VO.");
   });
 
@@ -156,10 +159,12 @@ describe("memory_search with liminal conversation recall", () => {
     expect(calls).toEqual([]);
   });
 
-  it("never reaches liminal when disabled, sandboxed, or in a group session", async () => {
+  it("never reaches liminal when disabled, for other senders, sandboxed, or in a group", async () => {
     const calls = stubLiminal({ "/memory/search": () => json({ object: "list", data: [HIT] }) });
     for (const [cfg, options] of [
       [config(), {}],
+      [config({ enabled: true }), { senderIsOwner: false }],
+      [config({ enabled: true }), { senderIsOwner: undefined }],
       [config({ enabled: true }), { sandboxed: true }],
       [config({ enabled: true }), { agentSessionKey: "agent:main:telegram:group:42" }],
     ] as const) {
@@ -199,6 +204,7 @@ describe("memory_get for conversation hits", () => {
     const tool = createMemoryGetTool({
       config: config({ enabled: true }),
       agentSessionKey: "agent:main:main",
+      senderIsOwner: true,
     });
     const result = await tool!.execute("call", { path: "conversation:ses_1#13", lines: 3 });
     expect(calls[0]).toEqual({
@@ -219,6 +225,7 @@ describe("memory_get for conversation hits", () => {
     const tool = createMemoryGetTool({
       config: config({ enabled: true }),
       agentSessionKey: "agent:main:main",
+      senderIsOwner: true,
     });
     const result = await tool!.execute("call", { path: "conversation:ses_x#0" });
     expect(result.details).toMatchObject({ status: "not_found", corpus: "conversations" });
