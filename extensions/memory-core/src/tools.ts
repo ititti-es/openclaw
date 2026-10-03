@@ -16,6 +16,13 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
+  attemptConversationSearch,
+  executeConversationRead,
+  finishConversationRecall,
+  resolveConversationRecall,
+  searchesConversationCorpus,
+} from "./liminal-tool.js";
+import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
   runMemoryCorpusDeadline,
@@ -252,8 +259,11 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         // The trusted runtime chooses the recall corpus; model-authored arguments cannot broaden it.
         const requestedCorpus =
           options.conversationRecall?.corpus === "sessions" ? "sessions" : modelRequestedCorpus;
+        // Conversation recall is user-wide, so it is off for sandboxed, group, and scoped-recall runs.
+        const liminal = resolveConversationRecall(cfg, options);
         if (
           requestedCorpus === "sessions" &&
+          !liminal &&
           !options.conversationRecall &&
           !settings.searchSources.includes("sessions")
         ) {
@@ -268,7 +278,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const cooldown =
           requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(agentId, cfg);
         const toolStartedAt = Date.now();
-        const searchesMemory = requestedCorpus !== "wiki";
+        // With liminal on it owns conversation history, so the sessions corpus is served there.
+        const searchesMemory =
+          requestedCorpus !== "wiki" && !(liminal && requestedCorpus === "sessions");
         const searchesWiki = requestedCorpus === "wiki" || requestedCorpus === "all";
         const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
         const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
@@ -433,7 +445,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             parentSignal: callerSignal,
             run: async (signal, deadlineControl) => {
               searchSignal = signal;
-              const [memory, wiki] = await Promise.all([
+              const resultLimit = maxResults ?? settings.query.maxResults;
+              const [memory, wiki, conversations] = await Promise.all([
                 searchesMemory ? searchMemory(signal, deadlineControl) : Promise.resolve(null),
                 searchesWiki
                   ? runMemoryCorpusDeadline({
@@ -451,9 +464,34 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                         }),
                     })
                   : Promise.resolve(null),
+                searchesConversationCorpus(liminal, requestedCorpus)
+                  ? attemptConversationSearch(
+                      { config: liminal, cfg, agentId, signal },
+                      query,
+                      resultLimit,
+                    )
+                  : Promise.resolve(null),
               ]);
               const memoryValue = memory?.outcome === "not-registered" ? null : memory?.value;
-              if (searchesMemory && !searchesWiki && memory?.outcome === "unavailable") {
+              if (
+                conversations?.error &&
+                !conversations.results.length &&
+                !searchesMemory &&
+                !searchesWiki
+              ) {
+                return jsonResult(
+                  buildMemorySearchUnavailableResult(
+                    `conversation recall unavailable: ${conversations.error}`,
+                    { agentId },
+                  ),
+                );
+              }
+              if (
+                searchesMemory &&
+                !searchesWiki &&
+                memory?.outcome === "unavailable" &&
+                !conversations?.results.length
+              ) {
                 return jsonResult(
                   memoryValue?.unavailableResult ??
                     buildMemorySearchUnavailableResult(memory.error, {
@@ -466,7 +504,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
               }
               const wikiResults = wiki?.outcome === "not-registered" ? [] : (wiki?.value ?? []);
               // Primary results already own their configured limit; only wiki/all need aggregation.
-              const results = searchesWiki
+              const notesResults: MemorySearchToolResult[] = searchesWiki
                 ? mergeMemorySearchCorpusResults({
                     memoryResults: memoryValue?.results ?? [],
                     supplementResults: wikiResults,
@@ -474,6 +512,17 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     balanceCorpora: requestedCorpus === "all",
                   })
                 : (memoryValue?.results ?? []);
+              const blended = await finishConversationRecall({
+                attempt: conversations,
+                config: liminal,
+                call: { cfg, agentId, signal },
+                query,
+                notes: notesResults,
+                limit: resultLimit,
+                notesError: memory?.outcome === "unavailable" ? memory.error : undefined,
+                interleave: mergeRankedMemorySearchToolStreams,
+              });
+              const results = blended.results;
               // Preserve primary object identity through blending: only evidence
               // actually returned to the model earns a recall signal.
               const surfaced = new Set(results);
@@ -520,6 +569,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   : []),
                 ...(staleness?.warning ? [staleness.warning] : []),
                 ...(recovery?.warning ? [recovery.warning] : []),
+                ...blended.warnings,
                 ...(memory?.outcome === "partial"
                   ? [
                       "Only memory-file keyword matches are included; semantic memory retrieval did not finish within the search time limit. Session transcript results are not included.",
@@ -535,14 +585,21 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   }
                 : undefined;
               return jsonResult({
-                results: results.map((result) => presentation.get(result) ?? result),
+                results: results.map((result) =>
+                  blended.rescore(result, presentation.get(result) ?? result),
+                ),
+                ...(blended.summary ? { conversations: blended.summary } : {}),
                 provider: memoryValue?.provider,
                 model: memoryValue?.model,
                 fallback: memoryValue?.fallback,
                 citations: citationsMode,
                 mode: memoryValue?.mode,
                 ...staleness,
-                ...(attempts.length > 0 || memoryValue?.automaticRebuildWarning ? metadata : {}),
+                ...(attempts.length > 0 ||
+                memoryValue?.automaticRebuildWarning ||
+                blended.warnings.length > 0
+                  ? metadata
+                  : {}),
                 ...(memory?.outcome === "partial" ? { partial: true } : {}),
                 // Another corpus can succeed while primary memory still needs repair.
                 ...(recovery?.action ? { action: recovery.action } : {}),
@@ -592,6 +649,17 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
+        const conversationRead = await executeConversationRead({
+          cfg,
+          agentId,
+          options,
+          relPath,
+          lines: lines ?? undefined,
+          signal: callerSignal,
+        });
+        if (conversationRead) {
+          return conversationRead;
+        }
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           return await executeWikiMemoryReadResult({
