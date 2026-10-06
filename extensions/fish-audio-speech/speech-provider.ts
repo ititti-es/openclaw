@@ -23,25 +23,28 @@ import {
   FISH_AUDIO_STREAM_MAX_BYTES,
   type FishAudioFormat,
   type FishAudioLatency,
-  type FishAudioModel,
   type FishAudioTtsRequest,
   fishAudioTts,
   fishAudioTtsStream,
   listFishAudioVoices,
   normalizeFishAudioBaseUrl,
+  normalizeOpenAICompatibleBaseUrl,
 } from "./tts.js";
 
 const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
-const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
+const DEFAULT_MODEL = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
 
 type FishAudioProviderConfig = {
   apiKey?: string;
   baseUrl: string;
-  model: FishAudioModel;
+  transport: "fish" | "openai-compatible";
+  model: string;
+  voice?: string;
+  inputReferences?: unknown[];
   referenceId?: string;
-  latency: FishAudioLatency;
+  latency?: FishAudioLatency;
   speed?: number;
   temperature?: number;
   topP?: number;
@@ -50,13 +53,19 @@ type FishAudioProviderConfig = {
 
 type FishAudioOverrides = Partial<Omit<FishAudioProviderConfig, "apiKey" | "baseUrl">>;
 
-function normalizeModel(value: unknown): FishAudioModel {
+function normalizeModel(value: unknown, transport: "fish" | "openai-compatible" = "fish"): string {
   const model = trimToUndefined(value);
   if (!model) {
+    if (transport === "openai-compatible") {
+      throw new Error("OpenAI-compatible transport requires model");
+    }
     return DEFAULT_MODEL;
   }
+  if (transport === "openai-compatible") {
+    return model;
+  }
   if (FISH_AUDIO_MODELS.some((candidate) => candidate === model)) {
-    return model as FishAudioModel;
+    return model;
   }
   throw new Error(`invalid Fish Audio model "${model}"`);
 }
@@ -80,49 +89,98 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
   return trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId ?? raw?.referenceId);
 }
 
+function normalizeTransport(value: unknown): "fish" | "openai-compatible" {
+  if (value === undefined || value === "fish") {
+    return "fish";
+  }
+  if (value === "openai-compatible") {
+    return "openai-compatible";
+  }
+  throw new Error(`invalid Fish Audio transport "${String(value)}"`);
+}
+
 function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw =
     asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
-  return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "tts.providers.fish-audio.apiKey",
-    }),
-    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw?.baseUrl)),
-    model: normalizeModel(raw?.model ?? raw?.modelId),
-    referenceId: resolveReferenceId(raw),
-    latency: normalizeLatency(raw?.latency),
-    speed: normalizeNumber(raw?.speed, 0.5, 2),
-    temperature: normalizeNumber(raw?.temperature, 0, 1),
-    topP: normalizeNumber(raw?.topP ?? raw?.top_p, 0, 1),
-    normalize: asBoolean(raw?.normalize),
-  };
+  return readProviderConfig(raw ?? {});
 }
 
 function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
-  const defaults = normalizeProviderConfig({});
   const raw = asOptionalRecord(config) ?? {};
+  const transport = normalizeTransport(raw.transport);
+  if (transport === "openai-compatible") {
+    assertOpenAICompatibleOptions(raw);
+  }
+  const inputReferences = raw.input_references ?? raw.inputReferences;
+  if (transport === "fish" && inputReferences !== undefined) {
+    throw new Error(
+      "input_references requires OpenAI-compatible transport; Fish Audio uses referenceId",
+    );
+  }
+  if (
+    inputReferences !== undefined &&
+    (!Array.isArray(inputReferences) || !inputReferences.length)
+  ) {
+    throw new Error(
+      "OpenAI-compatible input_references must be a nonempty array of reference parts",
+    );
+  }
   return {
-    apiKey: trimToUndefined(raw.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl) ?? defaults.baseUrl),
-    model: normalizeModel(raw.model ?? raw.modelId ?? defaults.model),
-    referenceId: resolveReferenceId(raw) ?? defaults.referenceId,
-    latency: normalizeLatency(raw.latency ?? defaults.latency),
-    speed: normalizeNumber(raw.speed, 0.5, 2) ?? defaults.speed,
-    temperature: normalizeNumber(raw.temperature, 0, 1) ?? defaults.temperature,
-    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1) ?? defaults.topP,
-    normalize: asBoolean(raw.normalize) ?? defaults.normalize,
+    transport,
+    apiKey: normalizeResolvedSecretInputString({
+      value: raw.apiKey,
+      path: "tts.providers.fish-audio.apiKey",
+    }),
+    baseUrl:
+      transport === "openai-compatible"
+        ? normalizeOpenAICompatibleBaseUrl(trimToUndefined(raw.baseUrl ?? raw.baseURL))
+        : normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl)),
+    model: normalizeModel(raw.model ?? raw.modelId, transport),
+    voice: trimToUndefined(raw.voice ?? raw.speakerVoiceId ?? raw.voiceId),
+    inputReferences: Array.isArray(inputReferences) ? inputReferences : undefined,
+    referenceId: transport === "fish" ? resolveReferenceId(raw) : undefined,
+    latency: transport === "fish" ? normalizeLatency(raw.latency) : undefined,
+    speed: normalizeNumber(raw.speed, 0.5, 2),
+    temperature: normalizeNumber(raw.temperature, 0, 1),
+    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1),
+    normalize: asBoolean(raw.normalize),
   };
 }
 
-function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
+function assertOpenAICompatibleOptions(raw: Record<string, unknown>): void {
+  for (const key of [
+    "referenceId",
+    "latency",
+    "temperature",
+    "topP",
+    "top_p",
+    "normalize",
+    "sampleRate",
+    "sample_rate",
+  ]) {
+    if (raw[key] !== undefined) {
+      throw new Error(
+        `OpenAI-compatible transport does not support Fish Audio ${key}; use model aliases or input_references for cloning`,
+      );
+    }
+  }
+}
+
+function readOverrides(
+  overrides: SpeechProviderOverrides | undefined,
+  transport: "fish" | "openai-compatible",
+): FishAudioOverrides {
   const raw = asOptionalRecord(overrides) ?? {};
+  if (transport === "openai-compatible") {
+    assertOpenAICompatibleOptions(raw);
+  }
   return {
+    voice: trimToUndefined(raw.voice ?? raw.speakerVoiceId ?? raw.voiceId),
     model: trimToUndefined(raw.model ?? raw.modelId)
-      ? normalizeModel(raw.model ?? raw.modelId)
+      ? normalizeModel(raw.model ?? raw.modelId, transport)
       : undefined,
-    referenceId: resolveReferenceId(raw),
+    referenceId: transport === "fish" ? resolveReferenceId(raw) : undefined,
     latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
     speed: normalizeNumber(raw.speed, 0.5, 2),
     temperature: normalizeNumber(raw.temperature, 0, 1),
@@ -131,9 +189,12 @@ function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudi
   };
 }
 
-function resolveApiKey(configValue?: string): string | undefined {
+function resolveApiKey(config: FishAudioProviderConfig): string | undefined {
+  if (config.transport === "openai-compatible") {
+    return resolveSpeechProviderApiKey(config.apiKey, process.env.OPENAI_COMPATIBLE_API_KEY);
+  }
   return resolveSpeechProviderApiKey(
-    configValue,
+    config.apiKey,
     process.env.FISH_API_KEY,
     process.env.FISH_AUDIO_API_KEY,
   );
@@ -149,7 +210,16 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
     case "fish_voice":
     case "fishaudio_voice":
       return ctx.policy.allowVoice
-        ? { handled: true, overrides: { ...ctx.currentOverrides, referenceId: ctx.value } }
+        ? {
+            handled: true,
+            overrides: {
+              ...ctx.currentOverrides,
+              [ctx.providerConfig?.transport === "openai-compatible" &&
+              !ctx.key.includes("reference")
+                ? "voice"
+                : "referenceId"]: ctx.value,
+            },
+          }
         : { handled: true };
     case "model":
     case "modelid":
@@ -162,7 +232,10 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
       try {
         return {
           handled: true,
-          overrides: { ...ctx.currentOverrides, model: normalizeModel(ctx.value) },
+          overrides: {
+            ...ctx.currentOverrides,
+            model: normalizeModel(ctx.value, normalizeTransport(ctx.providerConfig?.transport)),
+          },
         };
       } catch (error) {
         return { handled: true, warnings: [String(error)] };
@@ -243,16 +316,28 @@ function resolveSynthesisRequest(
   >,
 ): Omit<FishAudioTtsRequest, "maxBytes"> & { fileExtension: string; voiceCompatible: boolean } {
   const config = readProviderConfig(req.providerConfig);
-  const overrides = readOverrides(req.providerOverrides);
-  const apiKey = resolveApiKey(config.apiKey);
+  const overrides = readOverrides(req.providerOverrides, config.transport);
+  const apiKey = resolveApiKey(config);
   if (!apiKey) {
-    throw new Error("Fish Audio API key missing");
+    throw new Error(
+      config.transport === "openai-compatible"
+        ? "OpenAI-compatible API key missing"
+        : "Fish Audio API key missing",
+    );
+  }
+  if (config.transport === "openai-compatible" && req.target === "telephony") {
+    throw new Error(
+      "OpenAI-compatible transport does not support telephony: PCM sample rate is not guaranteed to be 8 kHz",
+    );
   }
   const output = resolveFormat(req.target);
   return {
     text: req.text,
     apiKey,
     baseUrl: config.baseUrl,
+    transport: config.transport,
+    voice: overrides.voice ?? config.voice,
+    inputReferences: config.inputReferences,
     model: overrides.model ?? config.model,
     referenceId: overrides.referenceId ?? config.referenceId,
     latency: overrides.latency ?? config.latency,
@@ -262,6 +347,7 @@ function resolveSynthesisRequest(
     normalize: overrides.normalize ?? config.normalize,
     timeoutMs: req.timeoutMs,
     ...output,
+    ...(config.transport === "openai-compatible" ? { sampleRate: undefined } : {}),
   };
 }
 
@@ -276,46 +362,56 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     parseDirectiveToken,
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeProviderConfig(baseTtsConfig);
-      return {
-        ...base,
-        ...(talkProviderConfig.apiKey === undefined
+      const providers = asOptionalRecord(baseTtsConfig.providers);
+      const base =
+        asOptionalRecord(providers?.["fish-audio"]) ??
+        asOptionalRecord(baseTtsConfig["fish-audio"]) ??
+        {};
+      const changedTransport =
+        talkProviderConfig.transport !== undefined &&
+        talkProviderConfig.transport !== normalizeTransport(base.transport);
+      return readProviderConfig({
+        ...(changedTransport ? {} : base),
+        ...(resolveReferenceId(talkProviderConfig) || trimToUndefined(talkProviderConfig.voice)
+          ? {
+              speakerVoiceId: undefined,
+              voiceId: undefined,
+              referenceId: undefined,
+              voice: undefined,
+            }
+          : {}),
+        ...talkProviderConfig,
+        ...(talkProviderConfig.modelId === undefined ? {} : { model: talkProviderConfig.modelId }),
+        ...(talkProviderConfig.baseURL === undefined
           ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
-                value: talkProviderConfig.apiKey,
-                path: "talk.providers.fish-audio.apiKey",
-              }),
-            }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model) == null
-          ? {}
-          : { model: normalizeModel(talkProviderConfig.modelId ?? talkProviderConfig.model) }),
-        ...(resolveReferenceId(talkProviderConfig) == null
-          ? {}
-          : { referenceId: resolveReferenceId(talkProviderConfig) }),
-        ...(trimToUndefined(talkProviderConfig.latency) == null
-          ? {}
-          : { latency: normalizeLatency(talkProviderConfig.latency) }),
-        ...(normalizeNumber(talkProviderConfig.speed, 0.5, 2) == null
-          ? {}
-          : { speed: normalizeNumber(talkProviderConfig.speed, 0.5, 2) }),
-      };
+          : { baseUrl: talkProviderConfig.baseURL }),
+      });
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.modelId ?? params.model) == null
-        ? {}
-        : { model: normalizeModel(params.modelId ?? params.model) }),
-      ...(resolveReferenceId(params) == null ? {} : { referenceId: resolveReferenceId(params) }),
-      ...(normalizeNumber(params.speed, 0.5, 2) == null
-        ? {}
-        : { speed: normalizeNumber(params.speed, 0.5, 2) }),
-    }),
+    resolveTalkOverrides: ({ params }) => {
+      const { model, modelId, ...rest } = params;
+      const overrides = {
+        ...rest,
+        model: trimToUndefined(modelId ?? model),
+        voiceId: trimToUndefined(rest.voiceId),
+      };
+      return Object.fromEntries(
+        Object.entries(overrides).filter(([, value]) => value !== undefined),
+      );
+    },
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});
-      const apiKey = resolveApiKey(trimToUndefined(req.apiKey) ?? config.apiKey);
+      if (config.transport === "openai-compatible") {
+        if (!config.voice) {
+          throw new Error(
+            "OpenAI-compatible voice discovery is unsupported; configure voice or use a model alias",
+          );
+        }
+        return [{ id: config.voice }];
+      }
+      const apiKey = resolveApiKey({
+        ...config,
+        apiKey: trimToUndefined(req.apiKey) ?? config.apiKey,
+      });
       if (!apiKey) {
         throw new Error("Fish Audio API key missing");
       }
@@ -326,7 +422,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
       });
     },
     isConfigured: ({ providerConfig }) =>
-      Boolean(resolveApiKey(readProviderConfig(providerConfig).apiKey)),
+      Boolean(resolveApiKey(readProviderConfig(providerConfig))),
     synthesize: async (req) => {
       const params = resolveSynthesisRequest(req);
       const { resolveGeneratedMediaMaxBytes } =

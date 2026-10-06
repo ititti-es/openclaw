@@ -1,15 +1,17 @@
 // Fish Audio tests cover config, request mapping, streaming, discovery, and target formats.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import catalog from "./capability-catalog.js";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const releaseMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => {
     fetchWithSsrFGuardMock(params);
     return {
       response: await globalThis.fetch(params.url, params.init),
-      release: vi.fn(async () => {}),
+      release: releaseMock,
     };
   },
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
@@ -25,19 +27,15 @@ function requestBody(init?: RequestInit): Record<string, unknown> {
 describe("Fish Audio speech provider", () => {
   const originalFetch = globalThis.fetch;
 
-  afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-    vi.resetModules();
-  });
-
   afterEach(() => {
     globalThis.fetch = originalFetch;
     fetchWithSsrFGuardMock.mockClear();
+    releaseMock.mockClear();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it("exposes S2.1 free as the default without requiring a voice id", () => {
+  it("exposes the direct S2.1 default without requiring a voice id", () => {
     vi.stubEnv("FISH_API_KEY", "fish-test");
     const provider = buildFishAudioSpeechProvider();
     expect(provider.defaultModel).toBe("s2.1-pro");
@@ -214,5 +212,456 @@ describe("Fish Audio speech provider", () => {
         },
       }),
     ).toEqual({ handled: true, overrides });
+  });
+});
+
+describe("OpenAI-compatible speech transport", () => {
+  const provider = catalog.speechProviders[0];
+  if (!provider) {
+    throw new Error("Fish Audio speech catalog entry missing");
+  }
+  const originalFetch = globalThis.fetch;
+  const providerConfig = {
+    transport: "openai-compatible",
+    baseURL: "https://speech.example.test",
+    apiKey: "gateway-test",
+    model: "fish-s2.1-pro-free",
+  };
+  const request = {
+    text: "[whisper] Hello",
+    cfg: {},
+    providerConfig,
+    target: "audio-file" as const,
+    timeoutMs: 1234,
+  };
+  const policy = {
+    enabled: true,
+    allowText: true,
+    allowProvider: true,
+    allowVoice: true,
+    allowModelId: true,
+    allowVoiceSettings: true,
+    allowNormalization: true,
+    allowSeed: true,
+  };
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    fetchWithSsrFGuardMock.mockClear();
+    releaseMock.mockClear();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("resolves opt-in config and isolates environment credentials", async () => {
+    vi.stubEnv("FISH_API_KEY", "fish-test");
+    vi.stubEnv("FISH_AUDIO_API_KEY", "fish-compat-test");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "");
+    const config = provider.resolveConfig?.({
+      cfg: {},
+      rawConfig: { providers: { "fish-audio": { ...providerConfig, apiKey: undefined } } },
+      timeoutMs: 1000,
+    });
+    expect(config).toMatchObject({
+      transport: "openai-compatible",
+      baseUrl: "https://speech.example.test/v1",
+      model: "fish-s2.1-pro-free",
+    });
+    expect(provider.isConfigured({ providerConfig: config ?? {}, timeoutMs: 1000 })).toBe(false);
+    await expect(provider.synthesize({ ...request, providerConfig: config ?? {} })).rejects.toThrow(
+      "OpenAI-compatible API key missing",
+    );
+    vi.stubEnv("FISH_API_KEY", "");
+    vi.stubEnv("FISH_AUDIO_API_KEY", "");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "gateway-env-test");
+    expect(provider.isConfigured({ providerConfig: config ?? {}, timeoutMs: 1000 })).toBe(true);
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1000 })).toBe(false);
+    await expect(provider.synthesize({ ...request, providerConfig: {} })).rejects.toThrow(
+      "Fish Audio API key missing",
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://speech.example.test",
+    "https://speech.example.test/",
+    "https://speech.example.test/v1",
+    "https://speech.example.test/v1///",
+  ])("maps OpenAI speech through %s without a Fish model header", async (baseURL) => {
+    vi.stubEnv("FISH_API_KEY", "fish-test");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "gateway-env-test");
+    const input_references = [
+      { type: "input_audio", input_audio: { data: "data:audio/wav;base64,AQID", format: "wav" } },
+      { type: "text", text: "Reference words" },
+    ];
+    globalThis.fetch = vi.fn(async (url, init) => {
+      expect(url).toBe("https://speech.example.test/v1/audio/speech");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBe("Bearer gateway-env-test");
+      expect(headers.has("model")).toBe(false);
+      expect(requestBody(init)).toEqual({
+        model: "arbitrary-clone-alias",
+        input: request.text,
+        voice: "sage",
+        response_format: "mp3",
+        speed: 1.2,
+        input_references,
+      });
+      return new Response(new Uint8Array([1, 2]), { headers: { "content-type": "audio/mpeg" } });
+    });
+    const result = await provider.synthesize({
+      ...request,
+      providerConfig: {
+        transport: "openai-compatible",
+        baseURL,
+        model: "arbitrary-clone-alias",
+        voice: "sage",
+        speed: 1.2,
+        input_references,
+      },
+    });
+    expect(result.audioBuffer).toEqual(Buffer.from([1, 2]));
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        auditContext: "fish-audio.openai-compatible.tts",
+      }),
+    );
+  });
+
+  it("accepts aliases in Talk config, Talk overrides and directives but preserves direct model validation", () => {
+    const baseTtsConfig = {
+      providers: { "fish-audio": { ...providerConfig, model: "old-alias" } },
+    };
+    const talk = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig,
+      talkProviderConfig: { modelId: "new-clone-alias" },
+      timeoutMs: 1000,
+    });
+    expect(talk).toMatchObject({ transport: "openai-compatible", model: "new-clone-alias" });
+    expect(
+      provider.resolveTalkOverrides?.({
+        talkProviderConfig: talk ?? {},
+        params: { modelId: "another-alias", voiceId: "sage" },
+      }),
+    ).toMatchObject({ model: "another-alias", voiceId: "sage" });
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "model",
+        value: "directive-alias",
+        policy,
+        providerConfig,
+      }),
+    ).toEqual({ handled: true, overrides: { model: "directive-alias" } });
+    expect(
+      provider.parseDirectiveToken?.({ key: "voice", value: "sage", policy, providerConfig }),
+    ).toEqual({ handled: true, overrides: { voice: "sage" } });
+    expect(
+      provider.parseDirectiveToken?.({ key: "model", value: "directive-alias", policy }),
+    ).toMatchObject({
+      handled: true,
+      warnings: [expect.stringContaining("invalid Fish Audio model")],
+    });
+  });
+
+  it("resolves transport-neutral Talk overrides using the effective synthesis config", async () => {
+    const overrides = provider.resolveTalkOverrides?.({
+      talkProviderConfig: {},
+      params: { modelId: " custom-alias ", voiceId: " alloy " },
+    });
+    expect(overrides).toMatchObject({ model: "custom-alias", voiceId: "alloy" });
+    const inherited = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig: { providers: { "fish-audio": providerConfig } },
+      talkProviderConfig: {},
+      timeoutMs: 1000,
+    });
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      const body = requestBody(init);
+      if (body.input !== undefined) {
+        expect(body).toMatchObject({ model: "custom-alias", voice: "alloy" });
+      } else {
+        expect(body).toMatchObject({ reference_id: "alloy" });
+        expect(new Headers(init?.headers).get("model")).toBe("s1");
+      }
+      return new Response(new Uint8Array([1]), { headers: { "content-type": "audio/mpeg" } });
+    });
+    await provider.synthesize({ ...request, providerOverrides: overrides });
+    await provider.synthesize({
+      ...request,
+      providerConfig: inherited ?? {},
+      providerOverrides: overrides,
+    });
+    const directConfig = { apiKey: "fish-test" };
+    await expect(
+      provider.synthesize({
+        ...request,
+        providerConfig: directConfig,
+        providerOverrides: overrides,
+      }),
+    ).rejects.toThrow("invalid Fish Audio model");
+    const directOverrides = provider.resolveTalkOverrides?.({
+      talkProviderConfig: {},
+      params: { modelId: "s1", voiceId: "alloy" },
+    });
+    await provider.synthesize({
+      ...request,
+      providerConfig: directConfig,
+      providerOverrides: directOverrides,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["fish", "openai-compatible"])(
+    "discards inherited transport-specific options when Talk switches to %s",
+    async (transport) => {
+      const from =
+        transport === "fish"
+          ? {
+              ...providerConfig,
+              model: "custom-alias",
+              voice: "sage",
+              speakerVoiceId: "inherited-speaker",
+              voiceId: "inherited-voice",
+              input_references: [{}],
+              inputReferences: [{}],
+              speed: 1.5,
+            }
+          : {
+              apiKey: "fish-test",
+              baseUrl: "https://fish.example.test",
+              baseURL: "https://fish.example.test",
+              model: "s1",
+              modelId: "s1",
+              voice: "inherited-voice",
+              speakerVoiceId: "inherited-speaker",
+              voiceId: "inherited-id",
+              referenceId: "fish-reference",
+              reference_id: "fish-reference",
+              latency: "low",
+              temperature: 0.3,
+              topP: 0.6,
+              top_p: 0.6,
+              normalize: false,
+              speed: 1.5,
+              sampleRate: 8000,
+              sample_rate: 8000,
+            };
+      const talk = provider.resolveTalkConfig?.({
+        cfg: {},
+        baseTtsConfig: { providers: { "fish-audio": from } },
+        talkProviderConfig: {
+          transport,
+          ...(transport === "openai-compatible"
+            ? { baseURL: "https://speech.example.test", model: "fish-s2.1-pro-free" }
+            : {}),
+        },
+        timeoutMs: 1000,
+      });
+      expect(talk?.apiKey).toBeUndefined();
+      expect(talk?.baseUrl).toBe(
+        transport === "fish" ? "https://api.fish.audio" : "https://speech.example.test/v1",
+      );
+      vi.stubEnv(
+        transport === "fish" ? "FISH_API_KEY" : "OPENAI_COMPATIBLE_API_KEY",
+        "selected-test",
+      );
+      globalThis.fetch = vi.fn(async (_url, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer selected-test");
+        expect(requestBody(init)).toEqual(
+          transport === "fish"
+            ? { text: request.text, format: "mp3", sample_rate: 44100, latency: "balanced" }
+            : {
+                model: "fish-s2.1-pro-free",
+                input: request.text,
+                voice: "alloy",
+                response_format: "mp3",
+              },
+        );
+        return new Response(new Uint8Array([1]), { headers: { "content-type": "audio/mpeg" } });
+      });
+      await provider.synthesize({ ...request, providerConfig: talk ?? {} });
+      expect(() =>
+        provider.resolveTalkConfig?.({
+          cfg: {},
+          baseTtsConfig: { providers: { "fish-audio": from } },
+          talkProviderConfig: {
+            transport,
+            ...(transport === "openai-compatible"
+              ? { baseURL: "https://speech.example.test", latency: "low" }
+              : { input_references: [{}] }),
+          },
+          timeoutMs: 1000,
+        }),
+      ).toThrow(
+        transport === "openai-compatible"
+          ? "does not support Fish Audio latency"
+          : "requires OpenAI-compatible transport",
+      );
+    },
+  );
+
+  it.each(["referenceId", "latency", "temperature", "topP", "normalize", "sampleRate"])(
+    "rejects Fish-only %s in config and overrides before network access",
+    async (key) => {
+      await expect(
+        provider.synthesize({
+          ...request,
+          providerConfig: { ...providerConfig, [key]: key === "referenceId" ? "fish-voice" : 1 },
+        }),
+      ).rejects.toThrow(`does not support Fish Audio ${key}`);
+      await expect(
+        provider.synthesize({ ...request, providerOverrides: { [key]: 1 } }),
+      ).rejects.toThrow(`does not support Fish Audio ${key}`);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires an endpoint and model and rejects telephony across buffered and streamed entry points", async () => {
+    expect(() =>
+      provider.resolveConfig?.({
+        cfg: {},
+        rawConfig: { providers: { "fish-audio": { transport: "openai-compatible" } } },
+        timeoutMs: 1000,
+      }),
+    ).toThrow("requires baseUrl");
+    expect(() =>
+      provider.resolveConfig?.({
+        cfg: {},
+        rawConfig: {
+          providers: {
+            "fish-audio": {
+              transport: "openai-compatible",
+              baseURL: "https://speech.example.test",
+            },
+          },
+        },
+        timeoutMs: 1000,
+      }),
+    ).toThrow("OpenAI-compatible transport requires model");
+    await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
+      "does not support telephony",
+    );
+    await expect(provider.synthesize({ ...request, target: "telephony" })).rejects.toThrow(
+      "does not support telephony",
+    );
+    await expect(provider.streamSynthesize?.({ ...request, target: "telephony" })).rejects.toThrow(
+      "does not support telephony",
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("returns only configured voices or an unsupported discovery error without network access", async () => {
+    expect(
+      await provider.listVoices?.({ providerConfig: { ...providerConfig, voice: "sage" } }),
+    ).toEqual([{ id: "sage" }]);
+    await expect(provider.listVoices?.({ providerConfig })).rejects.toThrow(
+      "voice discovery is unsupported",
+    );
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds buffered audio and rejects reference parts in direct mode", async () => {
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer gateway-test");
+      expect(requestBody(init)).toMatchObject({ model: "fish-s2.1-pro-free", voice: "alloy" });
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "audio/mpeg" },
+      });
+    });
+    await expect(
+      provider.synthesize({
+        ...request,
+        cfg: { agents: { defaults: { mediaMaxMb: 2 / (1024 * 1024) } } },
+      }),
+    ).rejects.toThrow("exceeds");
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    await expect(
+      provider.synthesize({
+        ...request,
+        providerConfig: { apiKey: "fish-test", input_references: [{}] },
+      }),
+    ).rejects.toThrow("requires OpenAI-compatible transport");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["complete", "cancel", "release", "overflow"])(
+    "cleans up bounded streaming on %s",
+    async (mode) => {
+      const cancel = vi.fn();
+      globalThis.fetch = vi.fn(async (_url, init) => {
+        expect(requestBody(init)).toMatchObject({ response_format: "opus", voice: "alloy" });
+        expect(requestBody(init)).not.toHaveProperty("sample_rate");
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1, 2, 3]));
+              if (mode === "complete") {
+                controller.close();
+              }
+            },
+            cancel,
+          }),
+          { headers: { "content-type": "audio/opus" } },
+        );
+      });
+      const result = await provider.streamSynthesize?.({
+        ...request,
+        target: "voice-note",
+        cfg: {
+          agents: { defaults: { mediaMaxMb: (mode === "overflow" ? 2 : 10) / (1024 * 1024) } },
+        },
+      });
+      expect(result).toMatchObject({ outputFormat: "opus", voiceCompatible: true });
+      if (!result) {
+        throw new Error("stream missing");
+      }
+      if (mode === "complete") {
+        expect(await new Response(result.audioStream).arrayBuffer()).toEqual(
+          new Uint8Array([1, 2, 3]).buffer,
+        );
+      } else if (mode === "cancel") {
+        await result.audioStream.cancel();
+      } else if (mode === "overflow") {
+        await expect(new Response(result.audioStream).arrayBuffer()).rejects.toThrow(
+          "exceeds 2 bytes",
+        );
+      }
+      await result.release?.();
+      await result.release?.();
+      expect(releaseMock).toHaveBeenCalledTimes(1);
+      if (mode !== "complete") {
+        expect(cancel).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it.each(["http", "json", "read"])("releases streaming responses on %s failure", async (mode) => {
+    globalThis.fetch = vi.fn(async () =>
+      mode === "http"
+        ? new Response("upstream failed", { status: 502 })
+        : mode === "json"
+          ? Response.json({ error: "not audio" })
+          : new Response(
+              new ReadableStream({
+                start(controller) {
+                  controller.error(new Error("broken stream"));
+                },
+              }),
+              { headers: { "content-type": "audio/mpeg" } },
+            ),
+    );
+    if (mode === "read") {
+      const result = await provider.streamSynthesize?.(request);
+      await expect(new Response(result?.audioStream).arrayBuffer()).rejects.toThrow(
+        "broken stream",
+      );
+      await result?.release?.();
+    } else {
+      await expect(provider.streamSynthesize?.(request)).rejects.toThrow("OpenAI-compatible TTS");
+    }
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });
