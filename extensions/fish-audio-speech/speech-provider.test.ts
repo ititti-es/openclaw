@@ -225,6 +225,7 @@ describe("OpenAI-compatible speech transport", () => {
     transport: "openai-compatible",
     baseURL: "https://speech.example.test",
     apiKey: "gateway-test",
+    model: "fish-s2.1-pro-free",
   };
   const request = {
     text: "[whisper] Hello",
@@ -453,7 +454,9 @@ describe("OpenAI-compatible speech transport", () => {
         baseTtsConfig: { providers: { "fish-audio": from } },
         talkProviderConfig: {
           transport,
-          ...(transport === "openai-compatible" ? { baseURL: "https://speech.example.test" } : {}),
+          ...(transport === "openai-compatible"
+            ? { baseURL: "https://speech.example.test", model: "fish-s2.1-pro-free" }
+            : {}),
         },
         timeoutMs: 1000,
       });
@@ -516,7 +519,7 @@ describe("OpenAI-compatible speech transport", () => {
     },
   );
 
-  it("requires an endpoint and rejects telephony across buffered and streamed entry points", async () => {
+  it("requires an endpoint and model and rejects telephony across buffered and streamed entry points", async () => {
     expect(() =>
       provider.resolveConfig?.({
         cfg: {},
@@ -524,6 +527,20 @@ describe("OpenAI-compatible speech transport", () => {
         timeoutMs: 1000,
       }),
     ).toThrow("requires baseUrl");
+    expect(() =>
+      provider.resolveConfig?.({
+        cfg: {},
+        rawConfig: {
+          providers: {
+            "fish-audio": {
+              transport: "openai-compatible",
+              baseURL: "https://speech.example.test",
+            },
+          },
+        },
+        timeoutMs: 1000,
+      }),
+    ).toThrow("OpenAI-compatible transport requires model");
     await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
       "does not support telephony",
     );

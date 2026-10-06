@@ -48,10 +48,10 @@ inherited provider options are cleared, including credentials, endpoints,
 models, voices, references, and tuning. Supply the endpoint, credentials, and
 any desired options for that mode.
 
-The OpenAI-compatible transport accepts any model name or gateway alias in
-config, Talk, and directives. Set `model` to whatever your gateway serves; when
-omitted it defaults to `fish-s2.1-pro-free`. The static capability catalog still
-lists direct Fish models and the direct default `s2.1-pro`.
+The OpenAI-compatible transport requires `model`, set to whatever model name or
+alias your gateway serves; config, Talk, and directives accept any value. The
+static capability catalog still lists direct Fish models and the direct default
+`s2.1-pro`.
 
 Requests contain `model`, `input`, `voice`, `response_format`, and optional
 `speed`. `voice` defaults to `alloy`; `speakerVoiceId` and `voiceId` are also

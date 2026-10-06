@@ -33,7 +33,6 @@ import {
 
 const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
 const DEFAULT_MODEL = "s2.1-pro";
-const DEFAULT_OPENAI_COMPATIBLE_MODEL = "fish-s2.1-pro-free";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
 
@@ -57,7 +56,10 @@ type FishAudioOverrides = Partial<Omit<FishAudioProviderConfig, "apiKey" | "base
 function normalizeModel(value: unknown, transport: "fish" | "openai-compatible" = "fish"): string {
   const model = trimToUndefined(value);
   if (!model) {
-    return transport === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_MODEL : DEFAULT_MODEL;
+    if (transport === "openai-compatible") {
+      throw new Error("OpenAI-compatible transport requires model");
+    }
+    return DEFAULT_MODEL;
   }
   if (transport === "openai-compatible") {
     return model;
