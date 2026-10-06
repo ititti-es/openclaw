@@ -7,12 +7,12 @@
     "onStartup": false
   },
   "name": "Fish Audio",
-  "description": "Fish Audio speech with optional Liminal transport, streaming and voice notes; direct Fish supports telephony and voice discovery.",
+  "description": "Fish Audio speech with optional OpenAI-compatible transport, streaming and voice notes; direct Fish supports telephony and voice discovery.",
   "setup": {
     "providers": [
       {
         "id": "fish-audio",
-        "envVars": ["FISH_API_KEY", "FISH_AUDIO_API_KEY", "LIMINAL_API_KEY"]
+        "envVars": ["FISH_API_KEY", "FISH_AUDIO_API_KEY", "OPENAI_COMPATIBLE_API_KEY"]
       }
     ]
   },

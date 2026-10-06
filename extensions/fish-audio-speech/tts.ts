@@ -20,7 +20,7 @@ export type FishAudioTtsRequest = {
   apiKey: string;
   baseUrl: string;
   model: string;
-  transport?: "fish" | "liminal";
+  transport?: "fish" | "openai-compatible";
   voice?: string;
   inputReferences?: unknown[];
   referenceId?: string;
@@ -40,16 +40,16 @@ export function normalizeFishAudioBaseUrl(value?: string): string {
   return trimmed ? trimmed.replace(/\/+$/u, "") : FISH_AUDIO_BASE_URL;
 }
 
-export function normalizeLiminalBaseUrl(value?: string): string {
+export function normalizeOpenAICompatibleBaseUrl(value?: string): string {
   const baseUrl = value?.trim().replace(/\/+$/u, "");
   if (!baseUrl) {
-    throw new Error("Liminal transport requires baseUrl (or baseURL)");
+    throw new Error("OpenAI-compatible transport requires baseUrl (or baseURL)");
   }
   return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 }
 
 function buildFishAudioRequestBody(params: FishAudioTtsRequest): string {
-  if (params.transport === "liminal") {
+  if (params.transport === "openai-compatible") {
     return JSON.stringify({
       model: params.model,
       input: params.text,
@@ -76,33 +76,34 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
   response: Response;
   release: () => Promise<void>;
 }> {
-  const liminal = params.transport === "liminal";
-  const baseUrl = liminal
-    ? normalizeLiminalBaseUrl(params.baseUrl)
+  const openAICompatible = params.transport === "openai-compatible";
+  const baseUrl = openAICompatible
+    ? normalizeOpenAICompatibleBaseUrl(params.baseUrl)
     : normalizeFishAudioBaseUrl(params.baseUrl);
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   return await fetchWithSsrFGuard({
-    url: liminal ? `${baseUrl}/audio/speech` : `${baseUrl}/v1/tts`,
+    url: openAICompatible ? `${baseUrl}/audio/speech` : `${baseUrl}/v1/tts`,
     init: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${params.apiKey}`,
         "Content-Type": "application/json",
-        ...(liminal ? {} : { model: params.model }),
+        ...(openAICompatible ? {} : { model: params.model }),
       },
       body: buildFishAudioRequestBody(params),
     },
     timeoutMs: params.timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
-    auditContext: liminal ? "fish-audio.liminal.tts" : "fish-audio.tts",
+    auditContext: openAICompatible ? "fish-audio.openai-compatible.tts" : "fish-audio.tts",
   });
 }
 
 export async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
   const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const label = params.transport === "liminal" ? "Liminal TTS" : "Fish Audio TTS";
+  const label =
+    params.transport === "openai-compatible" ? "OpenAI-compatible TTS" : "Fish Audio TTS";
   const { response, release } = await requestFishAudioTts(params);
   try {
     await assertOkOrThrowProviderError(response, `${label} API error`);
@@ -122,7 +123,8 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
     await import("openclaw/plugin-sdk/provider-http");
-  const label = params.transport === "liminal" ? "Liminal TTS" : "Fish Audio TTS";
+  const label =
+    params.transport === "openai-compatible" ? "OpenAI-compatible TTS" : "Fish Audio TTS";
   const { response, release } = await requestFishAudioTts(params);
   let handedOff = false;
   try {

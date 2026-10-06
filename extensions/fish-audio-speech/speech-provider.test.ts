@@ -215,14 +215,14 @@ describe("Fish Audio speech provider", () => {
   });
 });
 
-describe("Liminal speech transport", () => {
+describe("OpenAI-compatible speech transport", () => {
   const provider = catalog.speechProviders[0];
   if (!provider) {
     throw new Error("Fish Audio speech catalog entry missing");
   }
   const originalFetch = globalThis.fetch;
   const providerConfig = {
-    transport: "liminal",
+    transport: "openai-compatible",
     baseURL: "https://speech.example.test",
     apiKey: "gateway-test",
   };
@@ -255,24 +255,24 @@ describe("Liminal speech transport", () => {
   it("resolves opt-in config and isolates environment credentials", async () => {
     vi.stubEnv("FISH_API_KEY", "fish-test");
     vi.stubEnv("FISH_AUDIO_API_KEY", "fish-compat-test");
-    vi.stubEnv("LIMINAL_API_KEY", "");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "");
     const config = provider.resolveConfig?.({
       cfg: {},
       rawConfig: { providers: { "fish-audio": { ...providerConfig, apiKey: undefined } } },
       timeoutMs: 1000,
     });
     expect(config).toMatchObject({
-      transport: "liminal",
+      transport: "openai-compatible",
       baseUrl: "https://speech.example.test/v1",
       model: "fish-s2.1-pro-free",
     });
     expect(provider.isConfigured({ providerConfig: config ?? {}, timeoutMs: 1000 })).toBe(false);
     await expect(provider.synthesize({ ...request, providerConfig: config ?? {} })).rejects.toThrow(
-      "Liminal API key missing",
+      "OpenAI-compatible API key missing",
     );
     vi.stubEnv("FISH_API_KEY", "");
     vi.stubEnv("FISH_AUDIO_API_KEY", "");
-    vi.stubEnv("LIMINAL_API_KEY", "gateway-env-test");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "gateway-env-test");
     expect(provider.isConfigured({ providerConfig: config ?? {}, timeoutMs: 1000 })).toBe(true);
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1000 })).toBe(false);
     await expect(provider.synthesize({ ...request, providerConfig: {} })).rejects.toThrow(
@@ -288,7 +288,7 @@ describe("Liminal speech transport", () => {
     "https://speech.example.test/v1///",
   ])("maps OpenAI speech through %s without a Fish model header", async (baseURL) => {
     vi.stubEnv("FISH_API_KEY", "fish-test");
-    vi.stubEnv("LIMINAL_API_KEY", "gateway-env-test");
+    vi.stubEnv("OPENAI_COMPATIBLE_API_KEY", "gateway-env-test");
     const input_references = [
       { type: "input_audio", input_audio: { data: "data:audio/wav;base64,AQID", format: "wav" } },
       { type: "text", text: "Reference words" },
@@ -311,7 +311,7 @@ describe("Liminal speech transport", () => {
     const result = await provider.synthesize({
       ...request,
       providerConfig: {
-        transport: "liminal",
+        transport: "openai-compatible",
         baseURL,
         model: "arbitrary-clone-alias",
         voice: "sage",
@@ -322,7 +322,10 @@ describe("Liminal speech transport", () => {
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2]));
     expect(releaseMock).toHaveBeenCalledTimes(1);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 1234, auditContext: "fish-audio.liminal.tts" }),
+      expect.objectContaining({
+        timeoutMs: 1234,
+        auditContext: "fish-audio.openai-compatible.tts",
+      }),
     );
   });
 
@@ -336,7 +339,7 @@ describe("Liminal speech transport", () => {
       talkProviderConfig: { modelId: "new-clone-alias" },
       timeoutMs: 1000,
     });
-    expect(talk).toMatchObject({ transport: "liminal", model: "new-clone-alias" });
+    expect(talk).toMatchObject({ transport: "openai-compatible", model: "new-clone-alias" });
     expect(
       provider.resolveTalkOverrides?.({
         talkProviderConfig: talk ?? {},
@@ -410,7 +413,7 @@ describe("Liminal speech transport", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["fish", "liminal"])(
+  it.each(["fish", "openai-compatible"])(
     "discards inherited transport-specific options when Talk switches to %s",
     async (transport) => {
       const from =
@@ -450,7 +453,7 @@ describe("Liminal speech transport", () => {
         baseTtsConfig: { providers: { "fish-audio": from } },
         talkProviderConfig: {
           transport,
-          ...(transport === "liminal" ? { baseURL: "https://speech.example.test" } : {}),
+          ...(transport === "openai-compatible" ? { baseURL: "https://speech.example.test" } : {}),
         },
         timeoutMs: 1000,
       });
@@ -458,7 +461,10 @@ describe("Liminal speech transport", () => {
       expect(talk?.baseUrl).toBe(
         transport === "fish" ? "https://api.fish.audio" : "https://speech.example.test/v1",
       );
-      vi.stubEnv(transport === "fish" ? "FISH_API_KEY" : "LIMINAL_API_KEY", "selected-test");
+      vi.stubEnv(
+        transport === "fish" ? "FISH_API_KEY" : "OPENAI_COMPATIBLE_API_KEY",
+        "selected-test",
+      );
       globalThis.fetch = vi.fn(async (_url, init) => {
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer selected-test");
         expect(requestBody(init)).toEqual(
@@ -480,16 +486,16 @@ describe("Liminal speech transport", () => {
           baseTtsConfig: { providers: { "fish-audio": from } },
           talkProviderConfig: {
             transport,
-            ...(transport === "liminal"
+            ...(transport === "openai-compatible"
               ? { baseURL: "https://speech.example.test", latency: "low" }
               : { input_references: [{}] }),
           },
           timeoutMs: 1000,
         }),
       ).toThrow(
-        transport === "liminal"
+        transport === "openai-compatible"
           ? "does not support Fish Audio latency"
-          : "requires Liminal transport",
+          : "requires OpenAI-compatible transport",
       );
     },
   );
@@ -514,7 +520,7 @@ describe("Liminal speech transport", () => {
     expect(() =>
       provider.resolveConfig?.({
         cfg: {},
-        rawConfig: { providers: { "fish-audio": { transport: "liminal" } } },
+        rawConfig: { providers: { "fish-audio": { transport: "openai-compatible" } } },
         timeoutMs: 1000,
       }),
     ).toThrow("requires baseUrl");
@@ -560,7 +566,7 @@ describe("Liminal speech transport", () => {
         ...request,
         providerConfig: { apiKey: "fish-test", input_references: [{}] },
       }),
-    ).rejects.toThrow("requires Liminal transport");
+    ).rejects.toThrow("requires OpenAI-compatible transport");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
@@ -637,7 +643,7 @@ describe("Liminal speech transport", () => {
       );
       await result?.release?.();
     } else {
-      await expect(provider.streamSynthesize?.(request)).rejects.toThrow("Liminal TTS");
+      await expect(provider.streamSynthesize?.(request)).rejects.toThrow("OpenAI-compatible TTS");
     }
     expect(releaseMock).toHaveBeenCalledTimes(1);
   });

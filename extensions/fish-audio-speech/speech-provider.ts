@@ -28,18 +28,19 @@ import {
   fishAudioTtsStream,
   listFishAudioVoices,
   normalizeFishAudioBaseUrl,
-  normalizeLiminalBaseUrl,
+  normalizeOpenAICompatibleBaseUrl,
 } from "./tts.js";
 
 const FISH_AUDIO_MODELS = ["s2.1-pro-free", "s2.1-pro", "s2-pro", "s1"] as const;
 const DEFAULT_MODEL = "s2.1-pro";
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "fish-s2.1-pro-free";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
 
 type FishAudioProviderConfig = {
   apiKey?: string;
   baseUrl: string;
-  transport: "fish" | "liminal";
+  transport: "fish" | "openai-compatible";
   model: string;
   voice?: string;
   inputReferences?: unknown[];
@@ -53,12 +54,12 @@ type FishAudioProviderConfig = {
 
 type FishAudioOverrides = Partial<Omit<FishAudioProviderConfig, "apiKey" | "baseUrl">>;
 
-function normalizeModel(value: unknown, transport: "fish" | "liminal" = "fish"): string {
+function normalizeModel(value: unknown, transport: "fish" | "openai-compatible" = "fish"): string {
   const model = trimToUndefined(value);
   if (!model) {
-    return transport === "liminal" ? "fish-s2.1-pro-free" : DEFAULT_MODEL;
+    return transport === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_MODEL : DEFAULT_MODEL;
   }
-  if (transport === "liminal") {
+  if (transport === "openai-compatible") {
     return model;
   }
   if (FISH_AUDIO_MODELS.some((candidate) => candidate === model)) {
@@ -86,12 +87,12 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
   return trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId ?? raw?.referenceId);
 }
 
-function normalizeTransport(value: unknown): "fish" | "liminal" {
+function normalizeTransport(value: unknown): "fish" | "openai-compatible" {
   if (value === undefined || value === "fish") {
     return "fish";
   }
-  if (value === "liminal") {
-    return "liminal";
+  if (value === "openai-compatible") {
+    return "openai-compatible";
   }
   throw new Error(`invalid Fish Audio transport "${String(value)}"`);
 }
@@ -106,18 +107,22 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
 function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
   const raw = asOptionalRecord(config) ?? {};
   const transport = normalizeTransport(raw.transport);
-  if (transport === "liminal") {
-    assertLiminalOptions(raw);
+  if (transport === "openai-compatible") {
+    assertOpenAICompatibleOptions(raw);
   }
   const inputReferences = raw.input_references ?? raw.inputReferences;
   if (transport === "fish" && inputReferences !== undefined) {
-    throw new Error("input_references requires Liminal transport; Fish Audio uses referenceId");
+    throw new Error(
+      "input_references requires OpenAI-compatible transport; Fish Audio uses referenceId",
+    );
   }
   if (
     inputReferences !== undefined &&
     (!Array.isArray(inputReferences) || !inputReferences.length)
   ) {
-    throw new Error("Liminal input_references must be a nonempty array of reference parts");
+    throw new Error(
+      "OpenAI-compatible input_references must be a nonempty array of reference parts",
+    );
   }
   return {
     transport,
@@ -126,8 +131,8 @@ function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConf
       path: "tts.providers.fish-audio.apiKey",
     }),
     baseUrl:
-      transport === "liminal"
-        ? normalizeLiminalBaseUrl(trimToUndefined(raw.baseUrl ?? raw.baseURL))
+      transport === "openai-compatible"
+        ? normalizeOpenAICompatibleBaseUrl(trimToUndefined(raw.baseUrl ?? raw.baseURL))
         : normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl)),
     model: normalizeModel(raw.model ?? raw.modelId, transport),
     voice: trimToUndefined(raw.voice ?? raw.speakerVoiceId ?? raw.voiceId),
@@ -141,7 +146,7 @@ function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConf
   };
 }
 
-function assertLiminalOptions(raw: Record<string, unknown>): void {
+function assertOpenAICompatibleOptions(raw: Record<string, unknown>): void {
   for (const key of [
     "referenceId",
     "latency",
@@ -154,7 +159,7 @@ function assertLiminalOptions(raw: Record<string, unknown>): void {
   ]) {
     if (raw[key] !== undefined) {
       throw new Error(
-        `Liminal transport does not support Fish Audio ${key}; use model aliases or input_references for cloning`,
+        `OpenAI-compatible transport does not support Fish Audio ${key}; use model aliases or input_references for cloning`,
       );
     }
   }
@@ -162,11 +167,11 @@ function assertLiminalOptions(raw: Record<string, unknown>): void {
 
 function readOverrides(
   overrides: SpeechProviderOverrides | undefined,
-  transport: "fish" | "liminal",
+  transport: "fish" | "openai-compatible",
 ): FishAudioOverrides {
   const raw = asOptionalRecord(overrides) ?? {};
-  if (transport === "liminal") {
-    assertLiminalOptions(raw);
+  if (transport === "openai-compatible") {
+    assertOpenAICompatibleOptions(raw);
   }
   return {
     voice: trimToUndefined(raw.voice ?? raw.speakerVoiceId ?? raw.voiceId),
@@ -183,8 +188,8 @@ function readOverrides(
 }
 
 function resolveApiKey(config: FishAudioProviderConfig): string | undefined {
-  if (config.transport === "liminal") {
-    return resolveSpeechProviderApiKey(config.apiKey, process.env.LIMINAL_API_KEY);
+  if (config.transport === "openai-compatible") {
+    return resolveSpeechProviderApiKey(config.apiKey, process.env.OPENAI_COMPATIBLE_API_KEY);
   }
   return resolveSpeechProviderApiKey(
     config.apiKey,
@@ -207,7 +212,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
             handled: true,
             overrides: {
               ...ctx.currentOverrides,
-              [ctx.providerConfig?.transport === "liminal" && !ctx.key.includes("reference")
+              [ctx.providerConfig?.transport === "openai-compatible" &&
+              !ctx.key.includes("reference")
                 ? "voice"
                 : "referenceId"]: ctx.value,
             },
@@ -312,12 +318,14 @@ function resolveSynthesisRequest(
   const apiKey = resolveApiKey(config);
   if (!apiKey) {
     throw new Error(
-      config.transport === "liminal" ? "Liminal API key missing" : "Fish Audio API key missing",
+      config.transport === "openai-compatible"
+        ? "OpenAI-compatible API key missing"
+        : "Fish Audio API key missing",
     );
   }
-  if (config.transport === "liminal" && req.target === "telephony") {
+  if (config.transport === "openai-compatible" && req.target === "telephony") {
     throw new Error(
-      "Liminal transport does not support telephony: PCM sample rate is not guaranteed to be 8 kHz",
+      "OpenAI-compatible transport does not support telephony: PCM sample rate is not guaranteed to be 8 kHz",
     );
   }
   const output = resolveFormat(req.target);
@@ -337,7 +345,7 @@ function resolveSynthesisRequest(
     normalize: overrides.normalize ?? config.normalize,
     timeoutMs: req.timeoutMs,
     ...output,
-    ...(config.transport === "liminal" ? { sampleRate: undefined } : {}),
+    ...(config.transport === "openai-compatible" ? { sampleRate: undefined } : {}),
   };
 }
 
@@ -390,10 +398,10 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     listVoices: async (req) => {
       const config = readProviderConfig(req.providerConfig ?? {});
-      if (config.transport === "liminal") {
+      if (config.transport === "openai-compatible") {
         if (!config.voice) {
           throw new Error(
-            "Liminal voice discovery is unsupported; configure voice or use a model alias",
+            "OpenAI-compatible voice discovery is unsupported; configure voice or use a model alias",
           );
         }
         return [{ id: config.voice }];
