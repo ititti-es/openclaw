@@ -1,7 +1,8 @@
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+// Fish Audio HTTP client for buffered and streaming TTS plus voice discovery.
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
-  normalizeTrimmedStringList,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -18,7 +19,10 @@ export type FishAudioTtsRequest = {
   text: string;
   apiKey: string;
   baseUrl: string;
-  model: FishAudioModel;
+  model: string;
+  transport?: "fish" | "openai-compatible";
+  voice?: string;
+  inputReferences?: unknown[];
   referenceId?: string;
   format: FishAudioFormat;
   sampleRate?: number;
@@ -36,7 +40,25 @@ export function normalizeFishAudioBaseUrl(value?: string): string {
   return trimmed ? trimmed.replace(/\/+$/u, "") : FISH_AUDIO_BASE_URL;
 }
 
+export function normalizeOpenAICompatibleBaseUrl(value?: string): string {
+  const baseUrl = value?.trim().replace(/\/+$/u, "");
+  if (!baseUrl) {
+    throw new Error("OpenAI-compatible transport requires baseUrl (or baseURL)");
+  }
+  return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+}
+
 function buildFishAudioRequestBody(params: FishAudioTtsRequest): string {
+  if (params.transport === "openai-compatible") {
+    return JSON.stringify({
+      model: params.model,
+      input: params.text,
+      voice: params.voice ?? "alloy",
+      response_format: params.format,
+      ...(params.speed == null ? {} : { speed: params.speed }),
+      ...(params.inputReferences ? { input_references: params.inputReferences } : {}),
+    });
+  }
   return JSON.stringify({
     text: params.text,
     format: params.format,
@@ -54,33 +76,38 @@ async function requestFishAudioTts(params: FishAudioTtsRequest): Promise<{
   response: Response;
   release: () => Promise<void>;
 }> {
-  const baseUrl = normalizeFishAudioBaseUrl(params.baseUrl);
+  const openAICompatible = params.transport === "openai-compatible";
+  const baseUrl = openAICompatible
+    ? normalizeOpenAICompatibleBaseUrl(params.baseUrl)
+    : normalizeFishAudioBaseUrl(params.baseUrl);
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   return await fetchWithSsrFGuard({
-    url: `${baseUrl}/v1/tts`,
+    url: openAICompatible ? `${baseUrl}/audio/speech` : `${baseUrl}/v1/tts`,
     init: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${params.apiKey}`,
         "Content-Type": "application/json",
-        model: params.model,
+        ...(openAICompatible ? {} : { model: params.model }),
       },
       body: buildFishAudioRequestBody(params),
     },
     timeoutMs: params.timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
-    auditContext: "fish-audio.tts",
+    auditContext: openAICompatible ? "fish-audio.openai-compatible.tts" : "fish-audio.tts",
   });
 }
 
 export async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
   const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
     await import("openclaw/plugin-sdk/provider-http");
+  const label =
+    params.transport === "openai-compatible" ? "OpenAI-compatible TTS" : "Fish Audio TTS";
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
-    return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
+    await assertOkOrThrowProviderError(response, `${label} API error`);
+    return await readProviderBinaryResponse(response, `${label} API error`, "audio", {
       maxBytes: params.maxBytes,
     });
   } finally {
@@ -96,19 +123,21 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
     await import("openclaw/plugin-sdk/provider-binary-stream");
   const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
     await import("openclaw/plugin-sdk/provider-http");
+  const label =
+    params.transport === "openai-compatible" ? "OpenAI-compatible TTS" : "Fish Audio TTS";
   const { response, release } = await requestFishAudioTts(params);
   let handedOff = false;
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
-    assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
+    await assertOkOrThrowProviderError(response, `${label} API error`);
+    assertProviderBinaryResponseContent(response, `${label} API error`, "audio");
     if (!response.body) {
-      throw new Error("Fish Audio TTS API response missing audio stream");
+      throw new Error(`${label} API response missing audio stream`);
     }
     const bounded = createBoundedProviderBinaryStream(response.body, {
       maxBytes: params.maxBytes,
       createOverflowError: ({ maxBytes }) =>
-        new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
-      createReleaseError: () => new Error("Fish Audio TTS stream released"),
+        new Error(`${label} API error: audio response exceeds ${maxBytes} bytes`),
+      createReleaseError: () => new Error(`${label} stream released`),
       cleanup: release,
     });
     handedOff = true;
@@ -131,8 +160,16 @@ function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
   if (!id) {
     return undefined;
   }
-  const languages = normalizeTrimmedStringList(item?.languages);
-  const tags = normalizeTrimmedStringList(item?.tags);
+  const languages = Array.isArray(item?.languages)
+    ? item.languages.flatMap((entry) =>
+        typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
+      )
+    : [];
+  const tags = Array.isArray(item?.tags)
+    ? item.tags.flatMap((entry) =>
+        typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
+      )
+    : [];
   return {
     id,
     name: trimToUndefined(item?.title),
@@ -217,3 +254,5 @@ export async function listFishAudioVoices(params: {
     return true;
   });
 }
+
+export const FISH_AUDIO_STREAM_MAX_BYTES = MAX_AUDIO_BYTES;

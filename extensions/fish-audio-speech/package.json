@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/fish-audio-speech",
   "version": "2026.9.8",
-  "description": "OpenClaw Fish Audio speech plugin.",
+  "description": "OpenClaw Fish Audio speech plugin with opt-in OpenAI-compatible transport.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
