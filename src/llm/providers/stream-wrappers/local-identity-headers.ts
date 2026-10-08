@@ -7,8 +7,8 @@ import { getModelProviderRequestRouteFacts } from "../../../agents/provider-requ
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import { streamSimple } from "../../stream.js";
 
-export const OPENCLAW_AGENT_ID_HEADER = "x-openclaw-agent-id";
-export const LITELLM_HARNESS_HEADER = "x-litellm-harness";
+const AGENT_ID_HEADER = "x-openclaw-agent-id";
+const LITELLM_HARNESS_HEADER = "x-litellm-harness";
 const HARNESS = "openclaw";
 
 function isLocalEndpoint(model: Parameters<StreamFn>[0]): boolean {
@@ -37,7 +37,7 @@ export function createLocalEndpointIdentityHeadersWrapper(
       ...options,
       headers: {
         [LITELLM_HARNESS_HEADER]: HARNESS,
-        ...(agentId ? { [OPENCLAW_AGENT_ID_HEADER]: agentId } : {}),
+        ...(agentId ? { [AGENT_ID_HEADER]: agentId } : {}),
         ...options?.headers,
       },
     });

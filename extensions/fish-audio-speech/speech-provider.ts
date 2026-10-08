@@ -96,7 +96,7 @@ function normalizeTransport(value: unknown): "fish" | "openai-compatible" {
   if (value === "openai-compatible") {
     return "openai-compatible";
   }
-  throw new Error(`invalid Fish Audio transport "${String(value)}"`);
+  throw new Error(`invalid Fish Audio transport ${JSON.stringify(value) ?? "undefined"}`);
 }
 
 function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {

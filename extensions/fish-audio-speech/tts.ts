@@ -11,7 +11,6 @@ const FISH_AUDIO_VOICES_MAX_BYTES = 2 * 1024 * 1024;
 const FISH_AUDIO_VOICE_PAGE_SIZE = 100;
 const FISH_AUDIO_MAX_OWN_VOICE_PAGES = 20;
 
-export type FishAudioModel = "s2.1-pro-free" | "s2.1-pro" | "s2-pro" | "s1";
 export type FishAudioLatency = "low" | "balanced" | "normal";
 export type FishAudioFormat = "mp3" | "opus" | "wav" | "pcm";
 

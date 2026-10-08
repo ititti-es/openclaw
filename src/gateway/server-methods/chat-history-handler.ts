@@ -263,8 +263,11 @@ export async function handleChatHistoryRequest({
       !cursor &&
       sessionId !== undefined &&
       sessionId === entry?.sessionId &&
-      resolveServerOwnedHistoryRoute(cfg, resolvedSessionModel.provider, resolvedSessionModel.model) !==
-        undefined;
+      resolveServerOwnedHistoryRoute(
+        cfg,
+        resolvedSessionModel.provider,
+        resolvedSessionModel.model,
+      ) !== undefined;
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     try {
       historyPage = cursor
@@ -275,7 +278,8 @@ export async function handleChatHistoryRequest({
               readChatHistoryPage(
                 {
                   // Internal adapters may inspect message objects before responding.
-                  encodeResponse: acceptsSerializedJson && method === req.method && !serverOwnedHistory,
+                  encodeResponse:
+                    acceptsSerializedJson && method === req.method && !serverOwnedHistory,
                   entry: historyEntry,
                   provider: resolvedSessionModel.provider,
                   sessionId,

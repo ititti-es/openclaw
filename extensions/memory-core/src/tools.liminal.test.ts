@@ -1,5 +1,6 @@
 // Memory Core tests cover memory_search and memory_get with liminal conversation recall.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
+import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager.test-mocks.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
@@ -46,8 +47,8 @@ function stubLiminal(routes: Routes) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const path = new URL(String(url)).pathname.replace("/v1", "");
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const path = new URL(requestUrl(url)).pathname.replace("/v1", "");
+      const body = JSON.parse(requestBodyText(init?.body)) as Record<string, unknown>;
       calls.push({ path, body });
       const route = routes[path];
       return route ? route(body) : new Response("{}", { status: 404 });

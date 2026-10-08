@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
 
 /**
@@ -81,8 +82,7 @@ export function resolveServerOwnedHistoryRequest(
  */
 export function withoutServerOwnedContent(context: Context): Context {
   const last = context.messages.findLastIndex(
-    (message) =>
-      (message as unknown as Record<string, unknown>)[SERVER_OWNED_CONTENT_MARKER] === true,
+    (message) => isRecord(message) && message[SERVER_OWNED_CONTENT_MARKER] === true,
   );
   return last < 0 ? context : { ...context, messages: context.messages.slice(last + 1) };
 }

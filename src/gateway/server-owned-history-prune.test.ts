@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  overlayServerOwnedContent,
-  storedTurnsByResponse,
-} from "./server-methods/chat-history-server-owned.js";
-import {
-  hollowServerOwnedMessage,
-  planServerOwnedContentPrune,
-} from "./server-owned-history-prune.js";
+import { storedTurnsByResponse } from "./server-methods/chat-history-server-owned-turns.js";
+import { overlayServerOwnedContent } from "./server-methods/chat-history-server-owned.js";
+import { planServerOwnedContentPrune } from "./server-owned-history-prune-plan.js";
 
 const MARKER = "serverOwnedContent";
 const PLACEHOLDER = "(Stored on the model gateway. Not available right now.)";
@@ -93,7 +88,10 @@ describe("server-owned history pruning", () => {
   });
 
   it("keeps ids, tool-call names and thinking, and marks the message", () => {
-    const hollow = hollowServerOwnedMessage(local[1] ?? {});
+    const planned = new Map(
+      planServerOwnedContentPrune(local, turns).map(({ index, message }) => [index, message]),
+    );
+    const hollow = planned.get(1);
 
     expect(hollow).toEqual({
       role: "assistant",
@@ -105,8 +103,7 @@ describe("server-owned history pruning", () => {
       __openclaw: { id: "a1", runId: "run_1" },
       [MARKER]: true,
     });
-    expect(hollowServerOwnedMessage(local[0] ?? {})).toMatchObject({ content: "", [MARKER]: true });
-    expect(hollowServerOwnedMessage(hollow ?? {})).toBeUndefined();
+    expect(planned.get(0)).toMatchObject({ content: "", [MARKER]: true });
   });
 
   it("gives back every emptied message's content through the chat history join", () => {
