@@ -142,12 +142,6 @@ export const testing = {
   },
 } as const;
 
-function isActiveMemoryManagerContext(
-  context: MemoryManagerContext | null,
-): context is ActiveMemoryManagerContext {
-  return context !== null && "manager" in context;
-}
-
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
   parentSignal?: AbortSignal,
@@ -289,8 +283,14 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         const rebuildNotices: Array<() => string | undefined> = [];
         const readRebuildWarning = () =>
           [...new Set(rebuildNotices.map((read) => read()).filter(Boolean))].join(" ") || undefined;
-        const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
-          if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
+        const acquireMemoryManager = async (): Promise<MemoryManagerContext> => {
+          const context = await getMemoryManagerContextWithPurpose({
+            cfg,
+            agentId,
+            purpose: memoryManagerPurpose,
+            acquireLocalService: options.acquireLocalService,
+          });
+          if (memoryManagerPurpose === "cli" && "manager" in context) {
             if (cleanupStarted) {
               void closeMemoryManagers([context.manager]);
             } else {
@@ -316,14 +316,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             unavailableValue: null,
             getPartialValue: () => (partial?.rawResults.length ? partial : null),
             run: async () => {
-              const memory = trackMemoryManager(
-                await getMemoryManagerContextWithPurpose({
-                  cfg,
-                  agentId,
-                  purpose: memoryManagerPurpose,
-                  acquireLocalService: options.acquireLocalService,
-                }),
-              );
+              const memory = await acquireMemoryManager();
               if ("error" in memory) {
                 throw new Error(memory.error ?? "memory search unavailable");
               }
@@ -339,14 +332,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 onRebuildNotice: (read) => rebuildNotices.push(read),
                 initialManager: { manager: memory.manager, managerMs: memory.debug?.managerMs },
                 refreshManager: async () => {
-                  const refreshed = trackMemoryManager(
-                    await getMemoryManagerContextWithPurpose({
-                      cfg,
-                      agentId,
-                      purpose: memoryManagerPurpose,
-                      acquireLocalService: options.acquireLocalService,
-                    }),
-                  );
+                  const refreshed = await acquireMemoryManager();
                   return "error" in refreshed
                     ? null
                     : { manager: refreshed.manager, managerMs: refreshed.debug?.managerMs };
@@ -661,17 +647,18 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
           return conversationRead;
         }
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
+        const request = {
+          relPath,
+          from: from ?? undefined,
+          lines: lines ?? undefined,
+          agentId,
+          agentSessionKey: options.agentSessionKey,
+          sandboxed: options.sandboxed,
+          requestedCorpus,
+          signal: callerSignal,
+        };
         if (requestedCorpus === "wiki") {
-          return await executeWikiMemoryReadResult({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-            agentId,
-            agentSessionKey: options.agentSessionKey,
-            sandboxed: options.sandboxed,
-            requestedCorpus,
-            signal: callerSignal,
-          });
+          return await executeWikiMemoryReadResult(request);
         }
         return await executeMemoryReadResult({
           read: async () =>
@@ -682,14 +669,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
               from: from ?? undefined,
               lines: lines ?? undefined,
             }),
-          requestedCorpus,
-          relPath,
-          from: from ?? undefined,
-          lines: lines ?? undefined,
-          agentId,
-          agentSessionKey: options.agentSessionKey,
-          sandboxed: options.sandboxed,
-          signal: callerSignal,
+          ...request,
         });
       },
   });

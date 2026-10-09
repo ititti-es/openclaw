@@ -102,7 +102,10 @@ and the generated channel-config fallback.
 
 The annotation-only compatibility audit added these dated records. Their
 `removeAfter` date is an earliest review date, not permission to remove a
-surface while its stated reader or migration condition remains unmet.
+surface while its stated reader or migration condition remains unmet. The ten
+October 1 annotation families are now `removal-pending`, with the original dates
+and the per-family removal conditions below preserved in the review queue.
+This does not authorize removal or claim a completed published-reader sweep.
 
 | Compatibility code                            | Removal condition                                                                                       | `removeAfter` |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
@@ -234,3 +237,17 @@ consume it.
 Release notes should include upcoming plugin deprecations with target dates
 and links to migration docs, before a compatibility path moves to
 `removal-pending` or `removed`.
+
+## Related
+
+<CardGroup cols={3}>
+  <Card title="SDK migration" href="/plugins/sdk-migration" icon="arrow-right-arrow-left">
+    Removed surfaces, their replacements, and the removal timeline.
+  </Card>
+  <Card title="Plugin manifest" href="/plugins/manifest" icon="file-code">
+    The manifest fields a compatibility record can deprecate.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins" icon="wrench">
+    Installing, updating, and inspecting installed plugins.
+  </Card>
+</CardGroup>

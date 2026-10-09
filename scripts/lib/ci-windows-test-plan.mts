@@ -1,4 +1,5 @@
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { isRuntimeTestFileIncluded, type RuntimeTestSelection } from "./ci-node-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
 export type WindowsTestShard = {
@@ -46,7 +47,6 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/cli/daemon-cli/status.print.test.ts": 4.2,
   "src/cli/mcp-cli.path-case.windows.test.ts": 6.8,
   "src/cli/runtime-cleanup-scope.windows.process.test.ts": 4,
-  "src/cli/update-cli/restart-helper.windows.test.ts": 4.3,
   "src/commands/agents.commands.list.test.ts": 5.6,
   "src/commands/backup-verify.test.ts": 9.6,
   "src/commands/doctor-gateway-auth-token.windows.test.ts": 0.1,
@@ -154,6 +154,11 @@ const runtimeBuildSeconds = 68;
 const fallbackFileSeconds = 3;
 const targetSeconds = 420;
 
+function addTimingSeconds(total: number, seconds: number): number {
+  // Preserve measured 0.1s precision so floating-point drift cannot inflate Math.ceil.
+  return Math.round((total + seconds) * 10) / 10;
+}
+
 function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
   const targets = [1, 2].flatMap((part) => {
     const script = scripts[`test:windows:ci:${part}`];
@@ -172,22 +177,25 @@ function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>
 
 export function createWindowsTestShards(
   scripts: Readonly<Record<string, string | undefined>>,
+  options: RuntimeTestSelection = {},
 ): WindowsTestShard[] {
   const envelopes: { targets: string[]; seconds: number }[] = [];
   const projects = new Map<string, { targets: string[]; seconds: number }>();
   const runtime = { targets: [] as string[], seconds: runtimeBuildSeconds };
-  for (const file of readWindowsTargets(scripts).toSorted()) {
+  for (const file of readWindowsTargets(scripts)
+    .filter((target) => isRuntimeTestFileIncluded(target, options))
+    .toSorted()) {
     const seconds = fileSeconds[file] ?? fallbackFileSeconds;
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.
       runtime.targets.push(file);
-      runtime.seconds += seconds;
+      runtime.seconds = addTimingSeconds(runtime.seconds, seconds);
     } else {
       const configs = buildVitestRunPlans([file]).map((plan) => plan.config);
       const key = configs.toSorted().join("\n") || file;
       const project = projects.get(key) ?? { targets: [], seconds: 0 };
       project.targets.push(file);
-      project.seconds += seconds;
+      project.seconds = addTimingSeconds(project.seconds, seconds);
       projects.set(key, project);
     }
   }
@@ -222,7 +230,7 @@ export function createWindowsTestShards(
       const shard = shards.reduce((best, candidate) =>
         candidate.predicted_seconds < best.predicted_seconds ? candidate : best,
       );
-      shard.predicted_seconds += envelope.seconds;
+      shard.predicted_seconds = addTimingSeconds(shard.predicted_seconds, envelope.seconds);
       shard.targets.push(...envelope.targets);
     }
     // Keep whole files: splitting a fixture file would repeat its prepared compiler.

@@ -1,7 +1,3 @@
-/**
- * Helper functions for agent attempt execution, Claude CLI transcript probing,
- * fallback prompts, and ACP visible-text accumulation.
- */
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -14,6 +10,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
@@ -24,17 +21,54 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveSilentReplySettings } from "../../config/silent-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+export function resolveCommandReplyExpectation(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  sessionEntry?: Pick<SessionEntry, "chatType">;
+  messageChannel?: string;
+  opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
+}): ReplyExpectation | undefined {
+  if (
+    params.opts.privateCompletion ||
+    params.opts.lane === AGENT_LANE_SUBAGENT ||
+    isSubagentSessionKey(params.sessionKey) ||
+    !isDeliverableMessageChannel(params.messageChannel ?? "")
+  ) {
+    return "required";
+  }
+  if (params.opts.inputProvenance?.kind !== "inter_session") {
+    return undefined;
+  }
+  const chatType = normalizeChatType(params.sessionEntry?.chatType);
+  return resolveSilentReplySettings({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    surface: params.messageChannel,
+    conversationType: chatType === "channel" ? "group" : chatType,
+  }).policy === "allow"
+    ? "optional"
+    : "required";
+}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -121,7 +155,6 @@ export async function sessionTranscriptHasContent(
   );
 }
 
-/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -147,7 +180,6 @@ function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
-/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -251,7 +283,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
   });
 }
 
-/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
 export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -262,7 +293,6 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
-/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -446,20 +476,6 @@ export function createAcpVisibleTextAccumulator() {
     return `${base}${chunk}`;
   };
 
-  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
-    if (!base) {
-      return { rawText: chunk, delta: chunk };
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      const delta = chunk.slice(base.length);
-      return { rawText: chunk, delta };
-    }
-    return {
-      rawText: `${base}${chunk}`,
-      delta: chunk,
-    };
-  };
-
   return {
     consume(chunk: string): { text: string; delta: string } | null {
       if (!chunk) {
@@ -498,13 +514,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
-      rawVisibleText = nextVisible.rawText;
-      if (!nextVisible.delta) {
-        return null;
-      }
-      visibleText = `${visibleText}${nextVisible.delta}`;
-      return { text: visibleText, delta: nextVisible.delta };
+      const delta =
+        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
+          ? chunk.slice(rawVisibleText.length)
+          : chunk;
+      rawVisibleText += delta;
+      visibleText += delta;
+      return { text: visibleText, delta };
     },
     finalize(): string {
       return visibleText.trim();

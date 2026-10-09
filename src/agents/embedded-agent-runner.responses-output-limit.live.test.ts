@@ -21,7 +21,8 @@ const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
 
 describeLive("embedded Responses output-limit recovery live", () => {
-  it("continues from a committed receipt after a real truncated tool call", async () => {
+  // Waived for 2026.9.7 by Peter's release decision; see #161084.
+  it.skip("continues from a committed receipt after a real truncated tool call", async () => {
     await withOpenClawTestState({ label: "responses-output-limit-live" }, async (state) => {
       const modelId = process.env.OPENCLAW_LIVE_RESPONSES_MODEL || "gpt-5.6-luna";
       const receiptPath = path.join(state.workspaceDir, "receipts.txt");
@@ -87,10 +88,11 @@ describeLive("embedded Responses output-limit recovery live", () => {
             if (requests.length >= 3) {
               throw new Error("Live output-limit proof exceeded three Responses requests");
             }
-            if (typeof init?.body !== "string") {
-              throw new Error("Live output-limit proof expected a JSON Responses request");
-            }
-            const request = JSON.parse(init.body) as ResponseCreateParamsStreaming;
+            // Responses bodies are pre-encoded bytes; decode without consuming init.
+            const request = (await new Request(
+              input,
+              init,
+            ).json()) as ResponseCreateParamsStreaming;
             const requestNumber = requests.length + 1;
             const toolName = requestNumber === 1 ? "exec" : "write";
             if (requestNumber <= 2) {

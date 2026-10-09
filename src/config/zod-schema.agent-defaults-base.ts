@@ -54,9 +54,15 @@ const EmbeddedAgentConfigSchema = z
 export const SilentReplyPolicyConfigSchema = z
   .object({
     group: SilentReplyPolicySchema.optional(),
-    internal: SilentReplyPolicySchema.optional(),
   })
   .strict();
+
+const AgentOwnerTargetSchema = z
+  .object({
+    agentId: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .optional();
 
 export const AgentDefaultsBaseSchema = z
   .object({
@@ -95,6 +101,8 @@ export const AgentDefaultsBaseSchema = z
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z
       .object({
+        /** Global opt-in for automatic Decision experiments; model selection is separate. */
+        decisionAssistance: z.boolean().optional(),
         localModelLean: z.boolean().optional(),
       })
       .strict()
@@ -250,30 +258,22 @@ export const AgentDefaultsBaseSchema = z
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
-    systemAgent: z
-      .object({
-        agentId: z.string().trim().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-    authInheritance: z
-      .object({
-        agentId: z.string().trim().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-    sessionStore: z
-      .object({
-        agentId: z.string().trim().min(1).optional(),
-      })
-      .strict()
-      .optional(),
+    systemAgent: AgentOwnerTargetSchema,
+    authInheritance: AgentOwnerTargetSchema,
+    sessionStore: AgentOwnerTargetSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
-        maxConcurrent: z.number().int().positive().optional(),
+        maxConcurrent: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Maximum concurrent child-agent runs per immediate spawning/controller session (default: 8). Independent sessions have independent budgets.",
+          ),
         maxSpawnDepth: z
           .number()
           .int()

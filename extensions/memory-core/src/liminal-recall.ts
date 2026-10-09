@@ -3,6 +3,7 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Conversation recall over liminal's session store, blended into `memory_search` / `memory_get`.
@@ -24,7 +25,7 @@ const SNIPPET_CHARS = 1500;
 const MAX_CONTEXT_SIDE = 20;
 const DEFAULT_CONTEXT_SIDE = 4;
 
-export const CONVERSATION_PATH_PREFIX = "conversation:";
+const CONVERSATION_PATH_PREFIX = "conversation:";
 const CONVERSATION_PATH_PATTERN = /^conversation:([^#\s]+)#(\d+)$/;
 
 export type LiminalRecallConfig = {
@@ -34,7 +35,7 @@ export type LiminalRecallConfig = {
   timeoutMs: number;
 };
 
-export type LiminalRecallDeps = {
+type LiminalRecallDeps = {
   fetch?: typeof fetch;
   resolveApiKey?: (params: {
     provider: string;
@@ -84,7 +85,7 @@ export type ConversationRead = {
   agent?: string;
 };
 
-export class LiminalRecallError extends Error {
+class LiminalRecallError extends Error {
   constructor(
     message: string,
     readonly status?: number,
@@ -92,10 +93,6 @@ export class LiminalRecallError extends Error {
     super(message);
     this.name = "LiminalRecallError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** The liminal block of the memory-core plugin config, or null when recall is not enabled. */
@@ -200,7 +197,7 @@ function clip(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit).trimEnd()} [...]`;
 }
 
-export function conversationPath(sessionId: string, seq: number): string {
+function conversationPath(sessionId: string, seq: number): string {
   return `${CONVERSATION_PATH_PREFIX}${sessionId}#${seq}`;
 }
 
@@ -239,7 +236,7 @@ export async function searchLiminalConversations(
 }
 
 /** Reranker scores for the candidates, in input order (higher is more relevant). */
-export async function rerankWithLiminal(
+async function rerankWithLiminal(
   call: LiminalRecallCall,
   params: { query: string; documents: readonly string[] },
 ): Promise<number[]> {

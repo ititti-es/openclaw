@@ -4,6 +4,11 @@ import { stripInternalRuntimeContext } from "../../agents/internal-runtime-conte
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth-provider.js";
 import { stripUserEnvelopeForDisplay } from "../../auto-reply/reply/user-envelope-display.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  storedTurnsByResponse,
+  type SessionItemsResponse,
+  type StoredTurn,
+} from "./chat-history-server-owned-turns.js";
 
 /**
  * Chat history for sessions whose model route owns conversation history
@@ -26,17 +31,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 const SESSION_ITEMS_TIMEOUT_MS = 5_000;
 
 type Item = Record<string, unknown>;
-export type StoredTurn = { inputs: Item[]; outputs: Item[] };
-type SessionItemsResponse = {
-  items?: Array<{
-    version?: number;
-    seq?: number;
-    is_output?: boolean;
-    summary?: boolean;
-    content?: unknown;
-  }>;
-  responses?: Array<{ id?: string; client_id?: string; version?: number; item_count?: number }>;
-};
 
 export type ServerOwnedHistoryRoute = {
   provider: string;
@@ -110,44 +104,6 @@ export async function fetchServerOwnedSessionTurns(params: {
     throw new Error(`session store returned HTTP ${response.status}`);
   }
   return storedTurnsByResponse((await response.json()) as SessionItemsResponse);
-}
-
-/**
- * Split a stored transcript into turns, keyed by the advertised id when the
- * store matched one. Each compaction starts a new version: a response's
- * `item_count` counts within its own version, and the summary items a
- * compaction wrote are not part of the conversation shown to the user.
- */
-export function storedTurnsByResponse(body: SessionItemsResponse): Map<string, StoredTurn> {
-  const versionOf = (value: { version?: number }) => value.version ?? 0;
-  const turns = new Map<string, StoredTurn>();
-  const versions = new Set([...(body.responses ?? [])].map(versionOf));
-  for (const version of versions) {
-    const items = (body.items ?? [])
-      .filter((item) => versionOf(item) === version)
-      .toSorted((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
-    const responses = (body.responses ?? [])
-      .filter((response) => versionOf(response) === version)
-      .toSorted((a, b) => (a.item_count ?? 0) - (b.item_count ?? 0));
-    let start = 0;
-    for (const response of responses) {
-      const end = response.item_count ?? start;
-      const key = response.client_id ?? response.id;
-      if (typeof key !== "string" || end <= start) {
-        continue;
-      }
-      const turn: StoredTurn = { inputs: [], outputs: [] };
-      for (const item of items.slice(start, end)) {
-        const content = asOptionalRecord(item.content);
-        if (content && item.summary !== true) {
-          (item.is_output ? turn.outputs : turn.inputs).push(content);
-        }
-      }
-      turns.set(key, turn);
-      start = end;
-    }
-  }
-  return turns;
 }
 
 function textParts(content: unknown): string[] {
@@ -329,7 +285,7 @@ export function overlayServerOwnedContent(
  * A message whose local content was emptied in favor of the endpoint, shown
  * while the endpoint cannot supply it, says so instead of rendering blank.
  */
-export function withUnavailablePlaceholder(message: unknown): unknown {
+function withUnavailablePlaceholder(message: unknown): unknown {
   const record = asOptionalRecord(message);
   if (record?.[SERVER_OWNED_CONTENT_MARKER] !== true) {
     return message;

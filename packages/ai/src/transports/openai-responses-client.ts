@@ -13,6 +13,7 @@ import {
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
@@ -104,7 +105,6 @@ import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
-  mergeTransportMetadata,
   notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
@@ -206,6 +206,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           model,
           responsesOptions?.transport,
         );
+        const encodeBody = prepareModelRequestBody(
+          websocketMode || compactRequest ? undefined : options,
+        );
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId: options?.sessionId,
           turnId: randomUUID(),
@@ -258,9 +261,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
-          }
-          if (!isOpenAICodexResponsesModel(model)) {
-            params = mergeTransportMetadata(params, turnState?.metadata);
           }
           params = sanitizeOpenAICodexResponsesParams(
             model,
@@ -427,6 +427,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         );
         const responseModelTracker = createResponseModelTracker(isOpenAICodexResponsesModel(model));
         let continuationBaseline: ResponsesContinuationRequest | undefined;
+        let dispatchedPreviousResponseId: string | undefined;
         let contextUsageEligible = true;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
@@ -438,6 +439,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             request: initialRequest,
             requestOptions,
             model,
+            encodeBody,
             observePrompt,
             initialAttemptKind,
             initialRejectedCompaction,
@@ -447,6 +449,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             canRetryStream: () => output.content.length === 0,
             wrapStream: ({ stream: rawResponseStream, response, attempt }) => {
               contextUsageEligible &&= attempt.kind === "initial";
+              dispatchedPreviousResponseId = attempt.request.previous_response_id;
               continuationBaseline = attempt.request.previous_response_id
                 ? (params as ResponsesContinuationRequest)
                 : (attempt.request as ResponsesContinuationRequest);
@@ -646,7 +649,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
           }
           if (continuationClaim && continuationBaseline && terminal) {
-            continuationClaim.commit(continuationBaseline, terminal);
+            continuationClaim.commit(continuationBaseline, terminal, dispatchedPreviousResponseId);
           }
           if (terminal && admitted && contextUsageEligible) {
             recordResponsesContextUsage(

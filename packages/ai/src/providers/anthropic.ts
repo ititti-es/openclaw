@@ -25,10 +25,9 @@ import {
   resolveAnthropicCacheOptions,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
+  resolveAnthropicRequestBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
-// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js";
 import {
@@ -60,15 +59,13 @@ import {
   resolveAnthropicThinkingEffort,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-} from "./anthropic-server-fallback.js";
+import { ANTHROPIC_SERVER_SIDE_FALLBACKS } from "./anthropic-server-fallback.js";
 import { applyAnthropicThinkingBindingControls } from "./anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
@@ -112,13 +109,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 function mergeHeaders(
   ...headerSources: (Record<string, string | null> | undefined)[]
 ): Record<string, string | null> {
-  const merged: Record<string, string | null> = {};
-  for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
-    }
-  }
-  return merged;
+  return Object.assign({}, ...headerSources);
 }
 
 const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
@@ -246,10 +237,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params, model);
-      const betaHeader = resolveAnthropicContextManagementBetaHeader(
-        params,
-        directApiKeyBetaHeader,
-      );
+      const betaHeader = resolveAnthropicRequestBetaHeader(params, directApiKeyBetaHeader);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -321,6 +309,7 @@ type AnthropicSimpleStreamOptions = SimpleStreamOptions &
   AnthropicContextManagementOptions & {
     authProfileId?: string;
     toolChoice?: AnthropicCompactionOptions["toolChoice"];
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
   };
 
 export const streamSimpleAnthropic: StreamFunction<
@@ -344,6 +333,7 @@ export const streamSimpleAnthropic: StreamFunction<
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
+    thinkingDisplay: options?.thinkingDisplay,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
@@ -415,7 +405,8 @@ export const streamSimpleAnthropic: StreamFunction<
 function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">): boolean {
   if (
     (!usesClaudeFable5MessagesContract(model) &&
-      resolveClaudeOpus5ModelIdentity(model) === undefined) ||
+      resolveClaudeOpus5ModelIdentity(model) === undefined &&
+      resolveClaudeSonnet55ModelIdentity(model) === undefined) ||
     model.provider !== "anthropic"
   ) {
     return false;
@@ -454,17 +445,27 @@ function createClient(
       ? { sanitizeSse: false as const }
       : undefined;
   // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
-  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
+  const clientOptions = {
+    baseURL: model.baseUrl,
+    dangerouslyAllowBrowser: true,
+    fetch: getAiTransportHost().buildModelFetch(model, undefined, fetchOptions),
+    maxRetries: 0,
+  };
+  const baseHeaders = {
+    accept: "application/json",
+    "anthropic-dangerous-direct-browser-access": "true",
+    ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
+  };
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
+      ...clientOptions,
       apiKey,
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
-      dangerouslyAllowBrowser: true,
       defaultHeaders: mergeHeaders(
         {
-          accept: "application/json",
+          accept: baseHeaders.accept,
           "anthropic-dangerous-direct-browser-access": "true",
           Authorization: null,
           ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
@@ -472,62 +473,30 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch,
-      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
-  // Copilot: Bearer auth, selective betas.
-  if (model.provider === "github-copilot") {
-    const client = new Anthropic({
-      apiKey: null,
-      authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        model.headers,
-        dynamicHeaders,
-        optionsHeaders,
-      ),
-      fetch,
-      maxRetries: 0,
-    });
-
-    return { client, isOAuthToken: false, serverSideFallback: false };
-  }
-
+  const isCopilot = model.provider === "github-copilot";
   if (
+    isCopilot ||
     usesFoundryBearerAuth({
       ...model,
       headers: resolveAiTransportHeaderSentinels(model.headers),
     })
   ) {
     const client = new Anthropic({
+      ...clientOptions,
       apiKey: null,
       authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
       defaultHeaders: mergeHeaders(
-        {
-          accept: "application/json",
-          "anthropic-dangerous-direct-browser-access": "true",
-          ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-        },
-        omitFoundryBearerCredentialHeaders(model.headers),
+        baseHeaders,
+        isCopilot ? model.headers : omitFoundryBearerCredentialHeaders(model.headers),
         dynamicHeaders,
         optionsHeaders,
       ),
-      fetch,
-      maxRetries: 0,
     });
-
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
@@ -539,13 +508,10 @@ function createClient(
       optionsHeaders,
     );
     const client = new Anthropic({
+      ...clientOptions,
       apiKey: null,
       authToken: apiKey,
-      baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
       defaultHeaders: identity.headers,
-      fetch,
-      maxRetries: 0,
     });
 
     return {
@@ -558,31 +524,21 @@ function createClient(
 
   // API key auth
   const serverSideFallback = supportsAnthropicServerSideFallback(model);
-  if (serverSideFallback) {
-    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
-  }
   const sessionAffinityHeaders: Record<string, string | null> =
     sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
       ? { "x-session-affinity": sessionId }
       : {};
   const defaultHeaders = mergeHeaders(
-    {
-      accept: "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-      ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
-    },
+    baseHeaders,
     sessionAffinityHeaders,
     model.headers,
     optionsHeaders,
   );
   const client = new Anthropic({
+    ...clientOptions,
     apiKey,
     authToken: null,
-    baseURL: model.baseUrl,
-    dangerouslyAllowBrowser: true,
     defaultHeaders,
-    fetch,
-    maxRetries: 0,
   });
 
   return {
@@ -661,7 +617,7 @@ async function buildParams(
     params.system = system;
   }
 
-  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Fable 5, Opus 5, and Sonnet 5.5 safety classifiers can decline benign-adjacent work.
   // Anthropic owns the per-category fallback recommendation so routing can
   // evolve without a client release.
   if (serverSideFallback) {

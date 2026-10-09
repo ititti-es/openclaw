@@ -181,7 +181,9 @@ it.each(["json", "human", "check"] as const)(
       expect(stderr).toEqual([]);
     } else {
       expect(JSON.parse(stdout.join(""))).toMatchObject(
-        mode === "json" ? result : { executorDelegation: "pid-start-v1" },
+        mode === "json"
+          ? result
+          : { executorDelegation: "pid-start-v1", postCoreExecutor: "stdin-pid-start-v1" },
       );
       expect(stderr.join("")).toContain("cleanup diagnostic");
       if (mode === "json") {
@@ -254,7 +256,12 @@ it.each([false, true])(
     };
     const completed = createDeferredCore();
     fixture.close.mockImplementation(async () => completed.resolve());
-    fixture.finish.mockResolvedValue(input.params.result);
+    fixture.finish.mockImplementation(async (_params, options) => {
+      if (restartPending) {
+        options.onGatewayStartAttempted?.();
+      }
+      return input.params.result;
+    });
     fixture.terminal.mockReturnValue({
       runId: "candidate-run",
       status: restartPending ? "running" : "succeeded",
@@ -277,7 +284,7 @@ it.each([false, true])(
           run: { ...input.params.opts.run, executorFence: fixture.fence },
         },
       },
-      { candidateRuntime: true },
+      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
     );
     expect(fixture.fence.assertCurrent).toHaveBeenCalled();
     expect(fixture.writeFile).toHaveBeenCalledExactlyOnceWith(
@@ -285,6 +292,7 @@ it.each([false, true])(
       JSON.stringify({
         result: input.params.result,
         exitCode: 0,
+        candidateStartAttempted: restartPending,
         ...(restartPending
           ? { restartRunId: "candidate-run" }
           : { terminalRunId: "candidate-run" }),
@@ -429,13 +437,14 @@ it.each([
       expect.objectContaining({
         opts: expect.objectContaining({ timeout: undefined }),
       }),
-      { candidateRuntime: true },
+      { candidateRuntime: true, onGatewayStartAttempted: expect.any(Function) },
     );
     expect(fixture.writeFile).toHaveBeenCalledWith(
       input.resultPath,
       JSON.stringify({
         result: input.params.result,
         exitCode: 0,
+        candidateStartAttempted: true,
         restartRunId: "synthetic-run",
         executorDelegation: "pid-start-v1",
       }),
@@ -455,27 +464,45 @@ it.each([
     noRestart: true,
   },
   {
-    name: "refuses the Doctor's stop for a different service",
+    name: "restores an inspected --no-restart service the Doctor had to stop",
+    stopped: false,
+    doctorStopped: true,
+    noRestart: true,
+    parentInspected: true,
+  },
+  {
+    name: "refuses the Doctor's stop for a replaced running service",
     stopped: false,
     doctorStopped: true,
     reassigned: true,
   },
 ])(
-  "inspects an uninspected predecessor service from a legacy parent and $name",
-  async ({ stopped, doctorStopped, noRestart, reassigned }) => {
-    const transferred = {
-      stopped: false,
-      inspected: false,
-      runtimeInspected: false,
-      running: false,
-      serviceMutationAllowed: false,
-      serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
-    };
+  "finalizes a predecessor service from a legacy parent and $name",
+  async ({ stopped, doctorStopped, noRestart, reassigned, parentInspected }) => {
+    const transferred = parentInspected
+      ? {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          servicePid: 631,
+          serviceEnv: {},
+          serviceManagerUid: 1000,
+          serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+        }
+      : {
+          stopped: false,
+          inspected: false,
+          runtimeInspected: false,
+          running: false,
+          serviceMutationAllowed: false,
+          serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
+        };
     const candidate = {
       stopped,
       inspected: true,
       runtimeInspected: true,
-      running: !doctorStopped,
+      running: !doctorStopped || Boolean(reassigned),
       servicePid: 631,
       serviceEnv: {},
       serviceManagerUid: 1000,
@@ -513,19 +540,7 @@ it.each([
       runId: "synthetic-run",
       status: "succeeded",
       steps: doctorStopped
-        ? [
-            {
-              step: "managed-service:candidate-stop",
-              status: "completed",
-              endedAtMs: 5,
-              detail: JSON.stringify({
-                pid: 631,
-                fingerprint: "f",
-                managerUid: 1000,
-                stoppedAtMs: 5,
-              }),
-            },
-          ]
+        ? [{ step: "finalize:predecessor-stop:5:1000:631:f", status: "completed", endedAtMs: 5 }]
         : [],
     });
     process.argv = [process.execPath, "update-migrated-finalize.worker.js"];
@@ -537,12 +552,14 @@ it.each([
     await import("./update-migrated-finalize.worker.js");
     await settled.promise;
 
+    // A recorded Doctor stop is verified without mutation; only the legacy
+    // uninspected transfer performs the candidate's own stop.
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         updateInstallKind: "package",
         root: "/synthetic",
         shouldRestart: true,
-        phase: "prepare",
+        phase: doctorStopped ? "inspect" : "prepare",
         jsonMode: true,
         timeoutMs: 1_000,
       }),
@@ -550,17 +567,24 @@ it.each([
     const finished = fixture.finish.mock.calls[0]?.[0] as {
       preManagedServiceStop?: typeof candidate;
       shouldRestart: boolean;
-      result: { steps: Array<{ name: string; advisory?: { message: string } }> };
+      result: { steps: Array<{ name: string; exitCode: number; advisory?: { message: string } }> };
     };
     const adopted = doctorStopped && !reassigned;
     expect(finished.preManagedServiceStop).toEqual(
-      adopted ? { ...candidate, stopped: true, stoppedAtMs: 5 } : candidate,
+      adopted
+        ? { ...candidate, stopped: true, stoppedAtMs: 5 }
+        : reassigned
+          ? transferred
+          : candidate,
     );
     expect(finished.result.steps.map((step) => step.name)).toEqual(
-      stopped || adopted ? ["managed-service"] : [],
+      stopped || doctorStopped ? ["managed-service"] : [],
     );
-    expect(finished.shouldRestart).toBe(true);
-    expect(Boolean(finished.result.steps[0]?.advisory)).toBe(Boolean(noRestart));
+    expect(finished.result.steps[0]?.exitCode ?? 0).toBe(reassigned ? 1 : 0);
+    expect(finished.shouldRestart).toBe(!(reassigned && noRestart));
+    expect(finished.result.steps[0]?.advisory?.message ?? "").toMatch(
+      reassigned ? /replaced after update Doctor/ : noRestart ? /despite --no-restart/ : /^$/,
+    );
     expect(process.exitCode).toBe(originalExitCode);
   },
 );
@@ -606,6 +630,7 @@ it.each([
       root: "/synthetic",
       configInputHash: "hash",
       repair: true,
+      databaseGenerations: { "/synthetic/agent.sqlite": null },
     });
     return undefined;
   });
@@ -618,19 +643,22 @@ it.each([
   }
 
   expect(doctor).toHaveBeenCalledOnce();
+  expect(doctor).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.anything(),
+    expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
+  );
   if (stops) {
     expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
     );
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
-      "synthetic-run",
-      expect.objectContaining({
-        step: "managed-service:candidate-stop",
-        status: "completed",
-        endedAtMs: 7,
-        detail: JSON.stringify({ pid: 631, fingerprint: "f", managerUid: 1000, stoppedAtMs: 7 }),
-      }),
-    );
+    // The receipt is a retained `finalize:` step whose key carries the identity,
+    // so published parents' detail compaction cannot erase it.
+    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
+      step: "finalize:predecessor-stop:7:1000:631:f",
+      status: "completed",
+      endedAtMs: 7,
+    });
     expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
       doctor.mock.invocationCallOrder[0] ?? 0,
     );

@@ -16,6 +16,7 @@ import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.
 import type { OpenClawConfig } from "../config/config.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -38,7 +39,8 @@ type History = {
 };
 
 describeLive("progress refresh through the live embedded runtime", () => {
-  it(
+  // Waived for 2026.9.7 by Peter's release decision; see #161083.
+  it.skip(
     "steers the active parent and refreshes an idle card without resuming work or adding chat",
     async ({ signal: testSignal, onTestFinished }) => {
       const stopping = new AbortController();
@@ -83,7 +85,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
         trigger: () => Promise<unknown>,
       ) => {
         signal.throwIfAborted();
-        const received = Promise.withResolvers<EventFrame>();
+        const received = createDeferredCore<EventFrame>();
         const listener = (event: EventFrame) => {
           if (predicate(event)) {
             received.resolve(event);
@@ -257,7 +259,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
           await waitRun(warmupRunId);
           // The previous completed turn must not fence steering of the next active parent.
           signal.throwIfAborted();
-          const started = Promise.withResolvers<void>();
+          const started = createDeferredCore();
           const watcher = watch(workspace, (_event, filename) => {
             if (filename === path.basename(startedPath)) {
               started.resolve();

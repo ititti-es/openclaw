@@ -46,7 +46,6 @@ describe("subagent spawn envelope", () => {
   });
 
   it.each([
-    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: true },
     { childDepth: 1, maxSpawnDepth: 2, parent: "main agent", spawning: true },
     { childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false },
   ])(
@@ -68,7 +67,7 @@ describe("subagent spawn envelope", () => {
     const envelope = buildEnvelope({ completionTarget: "parent" });
     for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
       expect(text).toContain("No result is automatically sent to a channel");
-      expect(text).toContain("remain silent");
+      expect(text).toContain("continues any unfinished work");
     }
     expect(envelope.acceptedNote).toContain("private requester turn");
     expect(envelope.acceptedNote).not.toContain("after your final answer");
@@ -112,7 +111,6 @@ describe("subagent spawn envelope", () => {
 
   it.each([
     ["agent:main:cron:job:run:attempt", true],
-    ["agent:main:telegram:chat", false],
     ["agent:main:slack:cron:job:run:attempt", false],
     [undefined, false],
   ])("limits cron receipt suppression to announcing runs: %s", (requesterSessionKey, omitted) => {

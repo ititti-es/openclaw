@@ -1,13 +1,11 @@
 // Memory Core tests cover the liminal conversation recall client.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { requestBodyText } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
-  conversationPath,
-  LiminalRecallError,
   parseConversationPath,
   rankByLiminalRerank,
   readLiminalConversation,
-  rerankWithLiminal,
   resolveLiminalRecallConfig,
   resolveLiminalRecallForSession,
   searchLiminalConversations,
@@ -91,8 +89,7 @@ describe("resolveLiminalRecallForSession", () => {
 
 describe("conversation paths", () => {
   it("round-trips session ids and rejects anything else", () => {
-    const path = conversationPath("925562bdfe9c4b29877307484b4a15d9", 13);
-    expect(path).toBe("conversation:925562bdfe9c4b29877307484b4a15d9#13");
+    const path = "conversation:925562bdfe9c4b29877307484b4a15d9#13";
     expect(parseConversationPath(path)).toEqual({
       sessionId: "925562bdfe9c4b29877307484b4a15d9",
       seq: 13,
@@ -129,7 +126,7 @@ describe("searchLiminalConversations", () => {
     });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe("http://127.0.0.1:4000/v1/memory/search");
-    expect(JSON.parse(String(init?.body))).toEqual({ query: "tomatoes", limit: 5 });
+    expect(JSON.parse(requestBodyText(init?.body))).toEqual({ query: "tomatoes", limit: 5 });
     expect(init?.headers).toMatchObject({
       authorization: "Bearer sk-test",
       "x-openclaw-agent-id": "main",
@@ -181,12 +178,16 @@ describe("reranking", () => {
         ],
       }),
     );
-    const scores = await rerankWithLiminal(callWith(fetchMock as typeof fetch), {
+    const notes = { snippet: "notes" };
+    const long = { snippet: "x".repeat(9000) };
+    const { ranked, scores } = await rankByLiminalRerank(callWith(fetchMock as typeof fetch), {
       query: "q",
-      documents: ["notes", "x".repeat(9000)],
+      candidates: [notes, long],
+      limit: 2,
     });
-    expect(scores).toEqual([0.1, 0.9]);
-    const body = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body)) as {
+    expect([scores.get(notes), scores.get(long)]).toEqual([0.1, 0.9]);
+    expect(ranked).toEqual([long, notes]);
+    const body = JSON.parse(requestBodyText(fetchMock.mock.calls[0]![1]?.body)) as {
       documents: string[];
     };
     expect(fetchMock.mock.calls[0]![0]).toBe("http://127.0.0.1:4000/v1/memory/rerank");
@@ -243,7 +244,7 @@ describe("readLiminalConversation", () => {
       seq: 4,
       lines: 5,
     });
-    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
+    expect(JSON.parse(requestBodyText(fetchMock.mock.calls[0]![1]?.body))).toEqual({
       session_id: "ses_1",
       seq: 4,
       before: 2,
@@ -276,6 +277,6 @@ describe("readLiminalConversation", () => {
         sessionId: "ses_x",
         seq: 0,
       }),
-    ).rejects.toBeInstanceOf(LiminalRecallError);
+    ).rejects.toMatchObject({ name: "LiminalRecallError", status: 500 });
   });
 });

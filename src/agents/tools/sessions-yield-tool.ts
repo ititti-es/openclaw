@@ -1,8 +1,3 @@
-/**
- * sessions_yield built-in tool.
- *
- * Ends the current turn after subagent spawning so completion events can resume the session later.
- */
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
@@ -10,7 +5,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
 const NO_PENDING_CHILD_COMPLETION_ERROR =
-  'No pending child completion is owned by this turn. If the assigned work is complete, return its result normally. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
+  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
 
 export type SessionsYieldClaimResult =
   | boolean
@@ -69,7 +64,6 @@ const SessionsYieldToolSchema = Type.Object({
   ),
 });
 
-/** Creates the sessions_yield tool for runtimes that support yield callbacks. */
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
   claimYield?: (

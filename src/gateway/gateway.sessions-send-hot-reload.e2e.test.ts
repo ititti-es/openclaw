@@ -26,7 +26,7 @@ const TARGET_REPLY = "TARGET_REPLY_AFTER_RELOAD";
 const DISPATCH_COMPLETE = "SENDER_DISPATCH_COMPLETE";
 
 type ModelCall = {
-  kind: "dispatch" | "dispatch-complete" | "target" | "reply" | "announce";
+  kind: "dispatch" | "dispatch-complete" | "target" | "reply";
   model: string;
   raw: string;
 };
@@ -168,14 +168,15 @@ async function startProvider() {
         return;
       }
       const raw = await readBody(request);
-      const rawModel = (JSON.parse(raw) as { model?: unknown }).model;
+      const body = JSON.parse(raw) as {
+        model?: unknown;
+        tools?: Array<{ type?: string; name?: string }>;
+      };
+      const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes("Agent-to-agent announce step:")) {
-        calls.push({ kind: "announce", model: modelId, raw });
-        textResponse(response, "ANNOUNCE_SKIP");
-      } else if (raw.includes(TARGET_REPLY) && raw.includes("Agent-to-agent reply step:")) {
+      if (raw.includes(TARGET_REPLY)) {
         calls.push({ kind: "reply", model: modelId, raw });
-        textResponse(response, "REPLY_SKIP");
+        textResponse(response, "Requester received the target result.");
       } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
         calls.push({ kind: "dispatch-complete", model: modelId, raw });
         const result = readTargetToolResult(raw);
@@ -188,6 +189,11 @@ async function startProvider() {
         textResponse(response, TARGET_REPLY);
       } else if (raw.includes(INITIAL_PROMPT)) {
         calls.push({ kind: "dispatch", model: modelId, raw });
+        expect(body.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "function", name: "sessions_send" }),
+          ]),
+        );
         toolResponse(response);
       } else {
         throw new Error(`unexpected model request: ${raw.slice(0, 500)}`);
@@ -235,7 +241,7 @@ function modelDefinition(id: string): ModelDefinitionConfig {
 
 describe("sessions_send across prepared runtime reload", () => {
   it(
-    "finishes model-A work and re-admits the detached reply and announcement on model B",
+    "finishes model-A work and re-admits one detached requester reply on model B",
     { timeout: 90_000 },
     async () => {
       const provider = await startProvider();
@@ -316,6 +322,9 @@ describe("sessions_send across prepared runtime reload", () => {
         plugins: { slots: { memory: "none" } },
         tools: {
           profile: "full",
+          // This synthetic provider exercises reload, not Tool Search or Code Mode.
+          codeMode: false,
+          toolSearch: false,
           sessions: { visibility: "all" },
           agentToAgent: { enabled: true, allow: ["*"] },
         },
@@ -427,7 +436,6 @@ describe("sessions_send across prepared runtime reload", () => {
           expect.objectContaining({ kind: "target", model: "model-a" }),
           expect.objectContaining({ kind: "dispatch-complete", model: "model-a" }),
           expect.objectContaining({ kind: "reply", model: "model-b" }),
-          expect.objectContaining({ kind: "announce", model: "model-b" }),
         ]),
       );
       const dispatchComplete = provider.calls.find((call) => call.kind === "dispatch-complete");
@@ -437,7 +445,7 @@ describe("sessions_send across prepared runtime reload", () => {
       });
       expect(provider.calls.filter((call) => call.kind === "reply")).toHaveLength(1);
       expect(provider.calls.filter((call) => call.kind === "target")).toHaveLength(1);
-      expect(provider.calls.filter((call) => call.kind === "announce")).toHaveLength(1);
+      expect(provider.calls).toHaveLength(4);
     },
   );
 });
