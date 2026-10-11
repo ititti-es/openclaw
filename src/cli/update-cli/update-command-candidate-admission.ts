@@ -25,7 +25,9 @@ import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import type { StagedUpdateCandidateAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
+import type { UpdateAdmissionReportParams } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
@@ -40,6 +42,25 @@ type CandidateAdmissionParams = {
   invocationCwd?: string;
   presentation: ReturnType<typeof createUpdateProgress>;
 };
+
+export function createUpdateCandidateAdmissionReport(
+  { target, opts, prepared }: Pick<CandidateAdmissionParams, "target" | "opts" | "prepared">,
+  error: UpdatePreMutationError,
+): UpdateAdmissionReportParams {
+  return {
+    root: target.root,
+    mode: target.mode,
+    installKind: target.updateInstallKind,
+    opts,
+    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+    reason: error.reason,
+    message: error.message,
+    nextAction: error.nextAction,
+    failureFacts: error.failureFacts,
+    stepResult: error.stepResult,
+    recoverySteps: error.recoverySteps,
+  };
+}
 
 function isUpdateAdmissionConfigUnchanged(
   before: ConfigFileSnapshot,
@@ -76,7 +97,7 @@ export async function inspectStagedUpdateCandidateAdmission(
     env?: NodeJS.ProcessEnv;
     assertCurrent?: () => void;
   },
-): Promise<{ result: UpdateCandidateAdmissionResult; configSnapshot: ConfigFileSnapshot }> {
+): Promise<StagedUpdateCandidateAdmission> {
   return await withOwnedManagedUpdateEnv(params.env, async () => {
     const { target, opts, prepared } = params;
     const installTarget = target.packageInstallTarget;
@@ -280,14 +301,13 @@ export async function withUpdateCandidateAdmission<T>(
       defaultRuntime.error(
         "Warning: Configuration changed after candidate admission; rechecking the retained candidate.",
       );
-      if (params.stagedPackage) {
-        return await inspect(params.stagedPackage);
-      }
     }
+    const recheckStaged = params.candidateAdmission && params.stagedPackage;
     if (
-      target.packageAlreadyCurrent ||
-      !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
-      target.updateInstallKind !== "package"
+      !recheckStaged &&
+      (target.packageAlreadyCurrent ||
+        !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
+        target.updateInstallKind !== "package")
     ) {
       applyUpdateCandidateAdmission({
         target,
@@ -325,18 +345,6 @@ export async function withUpdateCandidateAdmission<T>(
     if (!(error instanceof UpdatePreMutationError)) {
       throw error;
     }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
-      opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      stepResult: error.stepResult,
-      recoverySteps: error.recoverySteps,
-    });
+    return await reportPreMutationUpdateResult(createUpdateCandidateAdmissionReport(params, error));
   }
 }

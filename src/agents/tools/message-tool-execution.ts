@@ -2,18 +2,13 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ChatType } from "../../channels/chat-type.js";
-import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
+import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -29,12 +24,10 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
@@ -48,7 +41,9 @@ import {
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
   resolveMessageToolActionSchemaActions,
+  resolveMessageToolDiscoveryAsync,
 } from "./message-tool-discovery.js";
+import type { MessageToolOptions } from "./message-tool-execution.types.js";
 import { createMessageToolExplicitTargetGuard } from "./message-tool-explicit-target.js";
 import { createMessageToolGateway } from "./message-tool-gateway.js";
 import { prepareMessageToolGroupThread } from "./message-tool-group-thread.js";
@@ -66,6 +61,7 @@ import {
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
+  resolveSourceReplySinkDeliveryMode,
   SOURCE_REPLY_ONLY_MESSAGE_SCHEMA,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
@@ -74,66 +70,38 @@ import {
   sanitizeMessageToolVisiblePayload,
   type VisibleTextSuppressionReason,
 } from "./message-tool-visible-content.js";
-import { isPollVoteEchoText, resolvePollVoteEchoRoute } from "./poll-vote-echo.js";
-
-const POLL_VOTE_ECHO_TTL_MS = 30_000;
-
-// Keyed by agent session (conversation), NOT per message-tool instance: a native
-// poll and its accompanying comment arrive as separate inbound messages and are
-// processed in separate agent runs, each with a fresh tool instance. An
-// instance-local record would be lost before the follow-up text run, so the echo
-// (the agent restating its vote in prose) would leak. Session-scoped +
-// route-checked storage lets the vote in one run suppress the restatement in the
-// next while never crossing conversations. Single slot per session, TTL-bounded.
-const recentPollVoteBySession = new Map<
-  string,
-  { option: string; route: string; recordedAt: number }
->();
-
-type MessageToolOptions = {
-  agentAccountId?: string;
-  agentSessionKey?: string;
-  runSessionKey?: string;
-  runId?: string;
-  sessionId?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-  getRuntimeConfig?: () => OpenClawConfig;
-  admitScheduledInvocation?: () => OpenClawConfig;
-  getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
-  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
-  runMessageAction?: typeof runMessageAction;
-  currentChannelId?: string;
-  currentChatType?: ChatType;
-  currentMessagingTarget?: string;
-  messageActionTurnCapability?: string;
-  currentChannelProvider?: string;
-  currentThreadTs?: string;
-  agentThreadId?: string | number;
-  currentMessageId?: string | number;
-  currentInboundAudio?: boolean;
-  hasCurrentInboundAudio?: () => boolean;
-  replyToMode?: "off" | "first" | "all" | "batched";
-  hasRepliedRef?: { value: boolean };
-  sameChannelThreadRequired?: boolean;
-  sandboxRoot?: string;
-  sandboxContainerWorkdir?: string;
-  sandboxFsBridge?: SandboxFsBridge;
-  sandboxReadOnlyResourceMounts?: readonly { hostPath: string; containerPath: string }[];
-  sandboxWorkspaceMediaReadAllowed?: boolean;
-  requireExplicitTarget?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  /** Process-local completion authority: send only to the current source route. */
-  sourceReplyOnly?: boolean;
-  inboundEventKind?: InboundEventKind;
-  requesterSenderId?: string;
-  senderIsOwner?: boolean;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  workspaceDir?: string;
-};
+import {
+  recordPollVote,
+  resolvePollVoteEchoRoute,
+  suppressPollVoteEcho,
+} from "./poll-vote-echo.js";
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const steps = createMessageToolSteps(options);
+  let next = steps.next();
+  while (!next.done) {
+    const actions = resolveMessageToolActionSchemaActions(next.value);
+    next = steps.next({ actions, schema: buildMessageToolSchema(next.value, actions) });
+  }
+  return next.value;
+}
+
+export async function createMessageToolAsync(options?: MessageToolOptions): Promise<AnyAgentTool> {
+  const steps = createMessageToolSteps(options);
+  let next = steps.next();
+  while (!next.done) {
+    next = steps.next(await resolveMessageToolDiscoveryAsync(next.value));
+  }
+  return next.value;
+}
+
+function* createMessageToolSteps(
+  options?: MessageToolOptions,
+): Generator<
+  MessageToolDiscoveryParams,
+  AnyAgentTool,
+  Awaited<ReturnType<typeof resolveMessageToolDiscoveryAsync>>
+> {
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -141,9 +109,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
-  // Poll-vote echo record lives in the session-scoped map (recentPollVoteBySession)
-  // so it survives the run boundary between the vote and the follow-up text; a
-  // null session key disables the guard.
   const rawPollEchoSessionKey = options?.agentSessionKey?.trim() || undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const inferredCurrentChannel = resolveEffectiveCurrentChannelContext(options);
@@ -157,14 +122,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? inferredCurrentChannel.accountId;
-  const currentChannelIsInternal =
-    normalizeMessageChannel(inferredCurrentChannel.currentChannelProvider) ===
-    INTERNAL_MESSAGE_CHANNEL;
-  // WebChat tool sends use the private sink without changing the run-level
-  // contract: ordinary final answers must remain automatic and visible.
-  const sourceReplySinkDeliveryMode = currentChannelIsInternal
-    ? "message_tool_only"
-    : options?.sourceReplyDeliveryMode;
+  const sourceReplySinkDeliveryMode = resolveSourceReplySinkDeliveryMode(
+    inferredCurrentChannel.currentChannelProvider,
+    options?.sourceReplyDeliveryMode,
+  );
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -174,7 +135,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         })
       : undefined);
   const pollEchoSessionKey =
-    rawPollEchoSessionKey && resolvedAgentId
+    rawPollEchoSessionKey && resolvedAgentId && sourceReplySinkDeliveryMode === "message_tool_only"
       ? `${resolvedAgentId}\0${rawPollEchoSessionKey}`
       : undefined;
   const turnAuthority = createMessageToolTurnAuthority({
@@ -220,13 +181,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     : undefined;
   // Schema and prompt must use the same snapshot; repeated discovery can drift
   // across plugin hooks while needlessly loading channel action metadata twice.
-  const actions = messageToolDiscoveryParams
-    ? resolveMessageToolActionSchemaActions(messageToolDiscoveryParams)
-    : undefined;
+  const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
+  const actions = discovered?.actions;
   const baseSchema = options?.sourceReplyOnly
     ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
-    : messageToolDiscoveryParams
-      ? buildMessageToolSchema(messageToolDiscoveryParams, actions ?? [])
+    : discovered
+      ? discovered.schema
       : MessageToolSchema;
   const schema = addSourceReplyFinalControl(baseSchema);
   const description = options?.sourceReplyOnly
@@ -461,33 +421,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
         preparedMessageToolCatalog,
       });
-      const recentPollVote = pollEchoSessionKey
-        ? recentPollVoteBySession.get(pollEchoSessionKey)
-        : undefined;
-      if (
-        recentPollVote &&
-        pollEchoSessionKey &&
-        sourceReplySinkDeliveryMode === "message_tool_only" &&
-        (action === "send" || action === "reply")
-      ) {
-        if (Date.now() - recentPollVote.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
-          recentPollVoteBySession.delete(pollEchoSessionKey);
-        } else if (pollVoteEchoRoute === recentPollVote.route) {
-          const vote = recentPollVote;
-          recentPollVoteBySession.delete(pollEchoSessionKey);
-          const outboundText =
-            readToolStringParam(params, "text") ??
-            readToolStringParam(params, "message") ??
-            readToolStringParam(params, "content");
-          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
-            decisions.recordPollVoteEchoSuppressed();
-            return jsonResult({
-              status: "suppressed",
-              reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
-              message: "Suppressed outbound text because it only restated the poll vote just cast.",
-            });
-          }
-        }
+      if (suppressPollVoteEcho(pollEchoSessionKey, pollVoteEchoRoute, action, params)) {
+        decisions.recordPollVoteEchoSuppressed();
+        return jsonResult({
+          status: "suppressed",
+          reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
+          message: "Suppressed outbound text because it only restated the poll vote just cast.",
+        });
       }
 
       const hasCurrentMessageId =
@@ -553,7 +493,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      return await withChannelReadAuthority(
+      const prepareUse = messageActionAuthorization.scheduled?.prepareUse;
+      return await withPreparedChannelReadAuthority(
+        prepareUse
+          ? () => prepareUse(Boolean(scheduledRead || scheduledWrite), assertActionCurrent)
+          : undefined,
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
           : undefined,
@@ -592,6 +536,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
                 sandboxRoot: options?.sandboxRoot,
                 sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
                 sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+                sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                 // Only an admitted channel source can arm terminal restart reconciliation.
                 // Source-less scheduled and ambient sends remain ordinary message actions.
                 sourceReplyFinal: hasExactSourceTurn
@@ -696,32 +641,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             currentSourceReply
           ) {
             messageDelivery.sourceReplyDelivered = true;
-          }
-          if (
-            action === "poll-vote" &&
-            pollVoteEchoRoute &&
-            pollEchoSessionKey &&
-            sourceReplySinkDeliveryMode === "message_tool_only"
-          ) {
-            const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
-            const option =
-              typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
-            if (option) {
-              const recordedAt = Date.now();
-              // Prune expired entries on write so a session that votes but never
-              // sends a follow-up text can't leak a record forever in a long-lived
-              // gateway; the map stays bounded to sessions that voted within the TTL.
-              for (const [key, entry] of recentPollVoteBySession) {
-                if (recordedAt - entry.recordedAt >= POLL_VOTE_ECHO_TTL_MS) {
-                  recentPollVoteBySession.delete(key);
-                }
-              }
-              recentPollVoteBySession.set(pollEchoSessionKey, {
-                option,
-                route: pollVoteEchoRoute,
-                recordedAt,
-              });
+            // A later stall cannot erase this answer; recovery and its notice read it.
+            if (options?.sessionId) {
+              resolveActiveReplyOperationForSessionId(
+                options.sessionId,
+              )?.markSourceReplyDelivered();
             }
+          }
+          if (action === "poll-vote" && pollVoteEchoRoute && pollEchoSessionKey) {
+            const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
+            recordPollVote(pollEchoSessionKey, pollVoteEchoRoute, details?.pollVotedOption);
           }
           const response = toolResult ?? jsonResult(result.payload);
           const notice =
